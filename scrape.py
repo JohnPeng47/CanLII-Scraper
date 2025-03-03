@@ -5,9 +5,18 @@ from selenium.webdriver.common.by import By
 from webdriver_manager.chrome import ChromeDriverManager
 from webdriver_manager.core.driver_cache import DriverCacheManager
 
+import requests
+import bs4
 import os
+from pathlib import Path
 
-DRIVER_ROOT = "driver"
+DRIVER_ROOT = Path("driver")
+if not DRIVER_ROOT.exists():
+    os.makedirs(DRIVER_ROOT)
+
+RAW_CASES_DIR = Path("cases")
+if not RAW_CASES_DIR.exists():
+    os.makedirs(RAW_CASES_DIR)
 
 def get_chrome_driver(root_dir = DRIVER_ROOT):
     # Setup Chrome options
@@ -23,6 +32,23 @@ def get_chrome_driver(root_dir = DRIVER_ROOT):
 
     return driver
 
+def parse_case(case_url: str):
+    # Get the page content using requests
+    response = requests.get(case_url)
+    
+    # Get page source and create BeautifulSoup object
+    soup = bs4.BeautifulSoup(response.text, "html.parser")
+    
+    # Find all divs with class paragWrapper
+    parag_divs = soup.find_all("div", class_="paragWrapper")
+    
+    # Extract text from each div
+    texts = []
+    for div in parag_divs:
+        texts.append(div.get_text())
+        
+    return "\n".join(texts)
+
 driver = get_chrome_driver()
 
 # URL of the page to scrape
@@ -36,7 +62,12 @@ links = driver.find_elements(By.CSS_SELECTOR, "#filterableList a")
 
 # Print href attributes for each link
 for link in links:
-    print(link.get_attribute("href"))
-
+    case_url = link.get_attribute("href")
+    case = parse_case(case_url)
+    
+    filename = case_url.split("/")[-1].split(".")[0]
+    with open(f"{RAW_CASES_DIR}/{filename}", "w") as f:
+        f.write(case)
+    
 # Clean up
 driver.quit()
