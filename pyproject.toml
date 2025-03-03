@@ -1,0 +1,16 @@
+[tool.poetry]
+name = "canlii"
+version = "0.1.0"
+description = ""
+authors = ["JohnPeng47 <johnpeng47@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+selenium = "^4.29.0"
+webdriver-manager = "^4.0.2"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
