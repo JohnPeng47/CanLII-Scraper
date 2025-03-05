@@ -1,0 +1,8 @@
+{
+  "instance_id": "i-0bd15629230269e08",
+  "primary_eni_id": "eni-070a58b722386fce4",
+  "primary_private_ip": "172.31.6.246",
+  "secondary_eni_id": "eni-0095a8da4bf2e2f34", 
+  "secondary_ip": "3.133.8.176",
+  "region": "us-east-2"
+}
