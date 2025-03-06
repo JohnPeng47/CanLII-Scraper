@@ -3,8 +3,11 @@ import time
 import random
 import logging
 import os
+from threading import Lock
+from dataclasses import dataclass
 from pathlib import Path
 from datetime import datetime, timedelta
+import socket
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -16,6 +19,10 @@ from webdriver_manager.chrome import ChromeDriverManager
 from webdriver_manager.core.driver_cache import DriverCacheManager
 import bs4
 
+from rotate_ip import IPRotator
+
+LOG_FILE = f"logs/scraper_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -23,14 +30,34 @@ logging.basicConfig(
     handlers=[
         logging.StreamHandler(),
         logging.FileHandler(
-            filename=f"logs/scraper_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log",
+            filename=LOG_FILE,
             encoding="utf-8"
         )
     ]
 )
 
+@dataclass
+class IPRotateArgs:
+    instance_id: str
+    eni_id: str
+    region: str = "us-east-2"
+    rotation_limit: int = 3
+    
+@dataclass
+class IPRequestStats:
+    success: int
+    failed: int
+    total: int
+
 class BrowserManager:
-    def __init__(self, driver_path="driver", request_delay=(3, 8), max_retries=3, window_size=100, max_failures=50):
+    def __init__(self, 
+                 driver_path="driver", 
+                 request_delay=(3, 8), 
+                 max_retries=3, 
+                 window_size=10, 
+                 fail_rate=5,
+                 rotation_config: IPRotateArgs = None,
+                 interface=None):
         """
         Initialize the browser manager with customizable parameters
         
@@ -47,16 +74,40 @@ class BrowserManager:
 
         self.request_delay = request_delay
         self.max_retries = max_retries
-        self.driver = None
-        self.session = None
         
-        # Request tracking parameters
+        # window count for failure determination
+        self.curr_window = 0
         self.window_size = window_size
-        self.max_failures = max_failures
-        self.request_history = []  # List of tuples (timestamp, success)
+        self.request_history = []
+        self.fail_rate = 5
+
+        # Request tracking parameters
         self.total_requests = 0
         self.total_failures = 0
         self.total_successes = 0
+
+        self.lock = Lock()
+
+        # rotation
+        self._is_rotating_ip = False
+        self.ip_windows = []
+        if rotation_config:
+            self.ip_rotator = IPRotator(
+                instance_id=rotation_config.instance_id,
+                eni_id=rotation_config.eni_id,
+                region=rotation_config.region,
+                log_file=LOG_FILE
+            )
+            # ip-reassignment happen on the boundaries of windows
+        else:
+            self.ip_rotator = None
+
+        # initialize selenium and requests sessions to send traffic through our inteface
+        self.interface = interface
+        self.driver = None
+        self.session = None
+        self.initialize_selenium_driver()
+        self.initialize_requests_session()
 
         # Setup directory for failed requests log
         self.log_dir = Path("logs")
@@ -69,7 +120,7 @@ class BrowserManager:
         # Initialize logger
         self.logger = logging.getLogger("BrowserManager")
     
-    def initialize_driver(self):
+    def initialize_selenium_driver(self):
         """Initialize and return a Selenium Chrome WebDriver"""
         if self.driver is not None:
             try:
@@ -80,6 +131,8 @@ class BrowserManager:
         # Setup Chrome options
         chrome_options = Options()
         chrome_options.add_argument("--headless")  # Run in headless mode (optional)
+        if self.interface:
+            chrome_options.add_argument(f"--host-resolver-rules=MAP * {self.interface} , EXCLUDE localhost")
 
         driver_cache = DriverCacheManager(root_dir=Path("driver"))
         driver_path = ChromeDriverManager(cache_manager=driver_cache).install()
@@ -87,16 +140,26 @@ class BrowserManager:
         # Initialize the driver with existing or new driver
         service = Service(executable_path=driver_path)
         self.driver = webdriver.Chrome(service=service, options=chrome_options)
-    
-    def initialize_session(self):
+
+    def initialize_requests_session(self):
         """Initialize and return a requests Session with retry configuration"""
         if self.session is None:
             self.session = requests.Session()
             self.session.headers.update({
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
             })
-        return self.session
-    
+
+            if self.interface:
+                # Create an adapter with a source_address
+                original_socket = socket.socket
+                def patched_socket(*args, **kwargs):
+                    s = original_socket(*args, **kwargs)
+                    s.bind((self.interface, 0))
+                    return s
+                
+                # Apply the patch
+                socket.socket = patched_socket
+                                
     def _random_delay(self):
         """Apply a random delay between requests"""
         delay = random.uniform(self.request_delay[0], self.request_delay[1])
@@ -119,34 +182,51 @@ class BrowserManager:
     
     def _update_request_history(self, success):
         """Update request history and check failure threshold"""
-        current_time = datetime.now()
-        self.request_history.append((current_time, success))
-        
-        # Update totals
-        self.total_requests += 1
-        if success:
-            self.total_successes += 1
-        else:
-            self.total_failures += 1
-        
-        # Remove entries outside the window
-        window_start = current_time - timedelta(minutes=self.window_size)
-        self.request_history = [
-            entry for entry in self.request_history 
-            if entry[0] >= window_start
-        ]
-        
-        # Count recent failures
-        recent_failures = sum(1 for _, success in self.request_history if not success)
-        
-        if recent_failures >= self.max_failures:
-            raise Exception(
-                f"Too many failures in time window: {recent_failures} failures in last "
-                f"{self.window_size} minutes. Total requests: {self.total_requests} "
-                f"(Successes: {self.total_successes}, Failures: {self.total_failures})"
-            )
+        with self.lock:
+            self.request_history.append(success)
+            
+            # Update totals
+            self.total_requests += 1
+            if success:
+                self.total_successes += 1
+            else:
+                self.total_failures += 1
+            
+            # Count recent failures
+            window_start = len(self.request_history) - 1 - self.window_size
+            recent_failures = sum(1 for fail in self.request_history[window_start:] if not success)
+            self.logger.info(f"Failure rate: {recent_failures} / {self.window_size}")
 
-    def selenium_get(self, url, css_selector=None, timeout=10):
+            # default is if 5/10 of the last requests fail, we rotate to new IP
+            if recent_failures >= self.fail_rate:
+                if self.ip_rotator:
+                    self.logger.info(f"Recent failures {recent_failures} exceeds {self.fail_rate}, starting IP rotation")
+                    self.logger.info(f"")
+                    
+                    self._is_rotating_ip = True
+                    self.ip_rotator.rotate_elastic_ip()
+                    self._is_rotating_ip = False
+
+                    # reset stats
+                    self.total_failures = 0
+                    self.total_successes = 0
+                    self.total_requests = 0
+
+                    print("Stats for IP:")
+                    print("Total successes: ", self.total_successes)
+                    print("Total failures: ", self.total_failures)
+                    print("Total requests: ", self.total_requests)
+                
+                raise Exception(
+                    f"Too many failures in time window: {recent_failures} failures in last "
+                    f"{self.window_size} minutes. Total requests: {self.total_requests} "
+                    f"(Successes: {self.total_successes}, Failures: {self.total_failures})"
+                )
+            
+    def ip_rotation_happening(self):
+        return self._is_rotating_ip
+
+    def selenium_get(self, url, css_selector=None, timeout=2):
         """
         Fetch a URL using Selenium with retry logic
         
@@ -159,7 +239,7 @@ class BrowserManager:
             tuple: (success (bool), driver or None, error message or None)
         """
         if self.driver is None:
-            self.initialize_driver()
+            self.initialize_selenium_driver()
         
         retries = 0
         while retries < self.max_retries:
@@ -172,7 +252,7 @@ class BrowserManager:
                     WebDriverWait(self.driver, timeout).until(
                         EC.presence_of_element_located((By.CSS_SELECTOR, css_selector))
                     )
-                
+                                
                 # Apply delay before returning
                 self._random_delay()
                 self._update_request_history(True)  # Track successful request
@@ -182,16 +262,11 @@ class BrowserManager:
                 retries += 1
                 error_message = f"{type(e).__name__}: {str(e)}"
                 self.logger.warning(f"Selenium attempt {retries} failed: {error_message}")
-                
-                # Exponential backoff
-                wait_time = (2 ** retries) + random.uniform(0, 1)
-                self.logger.info(f"Waiting {wait_time:.2f} seconds before retry")
-                time.sleep(wait_time)
-                
-                # Check if we need to restart the browser
-                if "crashed" in str(e).lower() or retries >= 2:
-                    self.logger.info("Restarting browser due to crash or multiple failures")
-                    self.initialize_driver()
+
+                res = requests.get(url)
+                if res.status_code == 429:
+                    print("Rate-limit detected for Selenium, rotating IP....")
+                    self.ip_rotator.rotate_elastic_ip()  
         
         # Log and track the failed request after max retries
         self._log_failed_request(url, error_message, "selenium")
@@ -208,15 +283,12 @@ class BrowserManager:
             
         Returns:
             tuple: (success (bool), soup or response, error message or None)
-        """
-        if self.session is None:
-            self.initialize_session()
-        
+        """        
         retries = 0
         while retries < self.max_retries:
             try:
                 self.logger.info(f"Fetching {url} with requests (attempt {retries + 1})")
-                response = self.session.get(url, timeout=30)
+                response = self.session.get(url, timeout=2)
                 
                 # Check for error status codes
                 response.raise_for_status()
@@ -239,21 +311,15 @@ class BrowserManager:
                 error_message = f"{type(e).__name__}: {str(e)}"
                 self.logger.warning(f"Requests attempt {retries} failed: {error_message}")
                 
-                # Exponential backoff
-                wait_time = (2 ** retries) + random.uniform(0, 1)
-                self.logger.info(f"Waiting {wait_time:.2f} seconds before retry")
-                time.sleep(wait_time)
-                
-                # If we're getting rate limited, wait longer
+                # Log rate limiting
                 if "rate" in str(e).lower() or "429" in str(e):
-                    extra_wait = 30 + random.uniform(0, 15)
-                    self.logger.warning(f"Detected rate limiting, waiting additional {extra_wait:.2f} seconds")
-                    time.sleep(extra_wait)
-        
+                    self.logger.warning("Detected rate limiting")
+
         # Log and track the failed request after max retries
         self._log_failed_request(url, error_message, "requests")
         self._update_request_history(False)  # Track failed request
         return False, None, error_message
+
     
     def close(self):
         """Close all resources"""
