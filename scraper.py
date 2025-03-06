@@ -131,7 +131,7 @@ class BrowserManager:
         
         # Setup Chrome options
         chrome_options = Options()
-        chrome_options.add_argument("--headless")  # Run in headless mode (optional)
+        # chrome_options.add_argument("--headless")  # Run in headless mode (optional)
         if self.interface:
             chrome_options.add_argument(f"--host-resolver-rules=MAP * {self.interface} , EXCLUDE localhost")
 

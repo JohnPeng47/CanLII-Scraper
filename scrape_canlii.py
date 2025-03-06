@@ -115,12 +115,13 @@ def scrape_law_cases():
         max_retries=3,
         window_size=10,
         fail_rate=1,
-        rotation_config=IPRotateArgs(
-            instance_id=INSTANCE_ID,
-            eni_id=ENI_ID,
-            region="us-east-2",
-            rotation_limit=3
-        )
+        # rotation_config=IPRotateArgs(
+        #     instance_id=INSTANCE_ID,
+        #     eni_id=ENI_ID,
+        #     region="us-east-2",
+        #     rotation_limit=3
+        # )
+        rotation_config=False
     )
 
     try:
@@ -139,23 +140,26 @@ def scrape_law_cases():
                 failed_cases = []
 
                 url = TEMPLATE_URL.format(court=court, date=str(year))
-
                 # continuously getting more results from page
+                num_links = 0
                 show_more, driver, status_code = browser.selenium_get(url, css_selector=".link.showMoreResults")
-                while show_more:
-                    element = driver.find_element(By.CSS_SELECTOR, ".link.showMoreResults")
-                    click_element_with_js(driver, element)
-                    time.sleep(2)
-                    links = driver.find_elements(By.CSS_SELECTOR, "#filterableList a")
-                    show_more, driver, status_code = browser.selenium_get(url, css_selector=".link.showMoreResults")
-                    print("LINKS FOUND: ", len(links))
-
-                success, driver, status_code = browser.selenium_get(url, css_selector="#filterableList")
                 if status_code == 429:
                     browser.rotate_ip()
                     success, driver, status_code = browser.selenium_get(url, css_selector="#filterableList")
                     if status_code == 429:
                         raise Exception("Rate limited after IP rotation, WTF????")
+
+                while show_more:
+                    element = driver.find_element(By.CSS_SELECTOR, ".link.showMoreResults")
+                    click_element_with_js(driver, element)
+                    time.sleep(2)
+                    links = driver.find_elements(By.CSS_SELECTOR, "#filterableList a")
+                    # show_more, driver, status_code = browser.selenium_get(url, css_selector=".link.showMoreResults")
+                    print("LINKS FOUND: ", len(links))
+                    if len(links) == num_links:
+                        break
+                    else:
+                        num_links = len(links)
                 
                 court_dir = case_root / court
                 if not court_dir.exists():
