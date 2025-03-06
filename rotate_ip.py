@@ -5,6 +5,10 @@ import time
 import logging
 from botocore.exceptions import ClientError
 
+INSTANCE_ID = "i-0bd15629230269e08"
+PRIMARY_ENI = "eni-070a58b722386fce4"
+REGION = "us-east-2"
+
 class IPRotator:
     def __init__(self, 
                  instance_id: str, 
@@ -47,19 +51,23 @@ class IPRotator:
         # Set level for this specific logger
         logger.setLevel(logging.INFO)
         return logger
-
+    
     def get_current_public_ip(self):
         """Get the current public IP address using an external service"""
         try:
             response = requests.get("https://api.ipify.org", timeout=5)
-            return response.text
-        except requests.RequestException as e:
-            self.logger.error(f"Error retrieving current IP: {e}")
-            raise
+            response.raise_for_status()
+            return response.text.strip()
+        except Exception as e:
+            self.logger.error(f"Failed to get public IP: {str(e)}")
+            return None
 
-    def rotate_elastic_ip(self):
+    def rotate_elastic_ip(self, eni_id):
         """
-        Rotates the Elastic IP address.
+        Rotates the Elastic IP address for a specific ENI.
+
+        Args:
+            eni_id: The ID of the network interface to rotate IP for
 
         Returns:
             dict: Information about the new Elastic IP
@@ -73,19 +81,21 @@ class IPRotator:
             old_ip = self.get_current_public_ip()
             self.logger.info(f"Current public IP: {old_ip}")
             
-            # Find any existing Elastic IP associated with the instance
+            # Find any existing Elastic IP associated with the specific ENI
             addresses = self.ec2.describe_addresses(
                 Filters=[
                     {
-                        "Name": "instance-id",
-                        "Values": [self.instance_id]
+                        "Name": "network-interface-id",
+                        "Values": [eni_id]
                     }
                 ]
             )
             
             old_allocation_id = None
+            old_association_id = None
             if addresses["Addresses"]:
                 old_allocation_id = addresses["Addresses"][0]["AllocationId"]
+                old_association_id = addresses["Addresses"][0].get("AssociationId")
                 self.logger.info(f"Found existing Elastic IP with allocation ID: {old_allocation_id}")
             
             # Allocate a new Elastic IP
@@ -95,11 +105,18 @@ class IPRotator:
             new_ip = new_address["PublicIp"]
             self.logger.info(f"Allocated new Elastic IP: {new_ip} (AllocationId: {new_allocation_id})")
             
-            # Associate the new Elastic IP with the instance
-            self.logger.info(f"Associating new Elastic IP with instance {self.instance_id}...")
-            self.ec2.associate_address(
+            # If there's an existing association, disassociate it first
+            if old_association_id:
+                self.logger.info(f"Disassociating old Elastic IP from ENI {eni_id}...")
+                self.ec2.disassociate_address(AssociationId=old_association_id)
+                # Wait for the disassociation to complete
+                time.sleep(2)
+            
+            # Associate the new Elastic IP with the ENI
+            self.logger.info(f"Associating new Elastic IP with ENI {eni_id}...")
+            association_response = self.ec2.associate_address(
                 AllocationId=new_allocation_id,
-                NetworkInterfaceId=self.eni_id
+                NetworkInterfaceId=eni_id
             )
             
             # Wait for the association to complete
@@ -117,7 +134,9 @@ class IPRotator:
                 "old_ip": old_ip,
                 "new_ip": new_ip,
                 "allocation_id": new_allocation_id,
-                "instance_id": self.instance_id
+                "association_id": association_response.get("AssociationId"),
+                "instance_id": self.instance_id,
+                "eni_id": eni_id
             }
         
         except ClientError as e:
@@ -140,7 +159,7 @@ class IPRotator:
             self.logger.info(f"Pre-rotation IP: {pre_rotation_ip}")
             
             # Rotate the Elastic IP
-            result = self.rotate_elastic_ip()
+            result = self.rotate_elastic_ip(PRIMARY_ENI)
             
             # Wait for the changes to propagate
             self.logger.info("Waiting for IP changes to propagate...")
@@ -162,41 +181,36 @@ class IPRotator:
             self.logger.error(f"Error testing IP rotation: {e}")
             return False
 
-# if __name__ == "__main__":
-#     INSTANCE_ID = "i-0bd15629230269e08"
-#     PRIMARY_ENI = "eni-070a58b722386fce4"
-#     REGION = "us-east-2"
+if __name__ == "__main__":    
+    rotator = IPRotator(INSTANCE_ID, PRIMARY_ENI, REGION, rotation_limit=5)
     
-#     rotator = IPRotator(INSTANCE_ID, PRIMARY_ENI, REGION, rotation_limit=5)
-    
-#     try:
-#         self.logger.info("Starting Elastic IP rotation test...")
-#         success = rotator.test_rotation()
+    try:
+        print("Starting Elastic IP rotation test...")
+        success = rotator.test_rotation()
         
-#         if success:
-#             self.logger.info("Elastic IP rotation test completed successfully.")
-#             current_ip = rotator.get_current_public_ip()
-#             print("\nRotation Results:")
-#             print("-----------------")
-#             print(f"Status: SUCCESS")
-#             print(f"Current IP: {current_ip}")
-#             print(f"Rotation Time: {time.strftime('%Y-%m-%d %H:%M:%S')}")
-#         else:
-#             print("\nRotation Results:")
-#             print("-----------------")
-#             print("Status: FAILED")
-#             self.logger.error("Elastic IP rotation test failed.")
+        if success:
+            print("Elastic IP rotation test completed successfully.")
+            print("\nRotation Results:")
+            print("-----------------")
+            print(f"Status: SUCCESS")
+            print(f"Current IP: {rotator.get_current_public_ip()}")
+            print(f"Rotation Time: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+        else:
+            print("\nRotation Results:")
+            print("-----------------")
+            print("Status: FAILED")
+            print("Elastic IP rotation test failed.")
     
-#     except KeyboardInterrupt:
-#         self.logger.info("Script interrupted by user.")
-#         print("\nRotation Results:")
-#         print("-----------------")
-#         print("Status: FAILED")
-#         print("Error: Script interrupted by user")
-#     except Exception as e:
-#         error_message = str(e)
-#         self.logger.error(f"Script failed with error: {error_message}")
-#         print("\nRotation Results:")
-#         print("-----------------")
-#         print("Status: FAILED") 
-#         print(f"Error: {error_message}")
+    except KeyboardInterrupt:
+        print("Script interrupted by user.")
+        print("\nRotation Results:")
+        print("-----------------")
+        print("Status: FAILED")
+        print("Error: Script interrupted by user")
+    except Exception as e:
+        error_message = str(e)
+        print(f"Script failed with error: {error_message}")
+        print("\nRotation Results:")
+        print("-----------------")
+        print("Status: FAILED") 
+        print(f"Error: {error_message}")

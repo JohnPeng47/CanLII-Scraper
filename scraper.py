@@ -20,6 +20,7 @@ from webdriver_manager.core.driver_cache import DriverCacheManager
 import bs4
 
 from rotate_ip import IPRotator
+from config import ENI_ID
 
 LOG_FILE = f"logs/scraper_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
 
@@ -179,8 +180,36 @@ class BrowserManager:
         # Write to file
         with open(self.log_dir / "failed_requests.log", "a") as f:
             f.write(f"{timestamp} | {request_type} | {url} | {error_message}\n")
+
+    def get_current_public_ip(self):
+        """Get the current public IP address using an external service"""
+        _, driver,_ = self.selenium_get("https://api.ipify.org")
+        selenium_ip = driver.find_element("tag name", "pre").text
+        _, soup, _ = self.requests_get("https://api.ipify.org")
+        requests_ip = soup.find("pre").get_text()
+
+        return selenium_ip, requests_ip 
+
+    def ip_rotation_happening(self):
+        return self._is_rotating_ip
+
+    def rotate_ip(self):
+        """Rotate the IP address using the IP rotator and reinit selenium and requests session"""
+
+        # need to shutdown both interfaces because we cant have a listening 
+        # socket while reassociating the ip addresses
+        self.close()
+
+        self._is_rotating_ip = True
+        rotation = self.ip_rotator.rotate_elastic_ip(ENI_ID)
+        selenium_ip, requests_ip = self.get_current_public_ip()
+        assert selenium_ip == requests_ip == rotation["new_ip"]
+        self._is_rotating_ip = False
+
+        self.initialize_selenium_driver()
+        self.initialize_requests_session()
     
-    def _update_request_history(self, success):
+    def _update_window_and_check_if_rotate(self, success):
         """Update request history and check failure threshold"""
         with self.lock:
             self.request_history.append(success)
@@ -199,44 +228,40 @@ class BrowserManager:
 
             # default is if 5/10 of the last requests fail, we rotate to new IP
             if recent_failures >= self.fail_rate:
-                if self.ip_rotator:
-                    self.logger.info(f"Recent failures {recent_failures} exceeds {self.fail_rate}, starting IP rotation")
-                    self.logger.info(f"")
+                return True
+                # if self.ip_rotator:
+                #     if self.ip_rotation_happening():
+                #         self.logger.info("IP rotation already taking place, exiting...")
+                #         return
                     
-                    self._is_rotating_ip = True
-                    self.ip_rotator.rotate_elastic_ip()
-                    self._is_rotating_ip = False
+                #     self.logger.info(f"Recent failures {recent_failures} exceeds {self.fail_rate}, starting IP rotation")
+                    
+                #     self._is_rotating_ip = True
+                #     rotation = self.ip_rotator.rotate_elastic_ip(ENI_ID)
+                #     selenium_ip, requests_ip = self.get_current_public_ip()
+                #     assert selenium_ip == requests_ip == rotation["new_ip"]
+                #     self._is_rotating_ip = False
 
-                    # reset stats
-                    self.total_failures = 0
-                    self.total_successes = 0
-                    self.total_requests = 0
+                #     # reset stats
+                #     self.total_failures = 0
+                #     self.total_successes = 0
+                #     self.total_requests = 0
 
-                    print("Stats for IP:")
-                    print("Total successes: ", self.total_successes)
-                    print("Total failures: ", self.total_failures)
-                    print("Total requests: ", self.total_requests)
-                
-                raise Exception(
-                    f"Too many failures in time window: {recent_failures} failures in last "
-                    f"{self.window_size} minutes. Total requests: {self.total_requests} "
-                    f"(Successes: {self.total_successes}, Failures: {self.total_failures})"
-                )
-            
-    def ip_rotation_happening(self):
-        return self._is_rotating_ip
+                #     print("Stats for IP:")
+                #     print("Total successes: ", self.total_successes)
+                #     print("Total failures: ", self.total_failures)
+                #     print("Total requests: ", self.total_requests)                
+                # raise Exception(
+                #     f"Too many failures in time window: {recent_failures} failures in last "
+                #     f"{self.window_size} minutes. Total requests: {self.total_requests} "
+                #     f"(Successes: {self.total_successes}, Failures: {self.total_failures})"
+                # )
 
+        return False
+    
     def selenium_get(self, url, css_selector=None, timeout=2):
         """
         Fetch a URL using Selenium with retry logic
-        
-        Args:
-            url (str): URL to fetch
-            css_selector (str, optional): CSS selector to wait for
-            timeout (int, optional): Timeout in seconds for element waiting
-            
-        Returns:
-            tuple: (success (bool), driver or None, error message or None)
         """
         if self.driver is None:
             self.initialize_selenium_driver()
@@ -255,8 +280,7 @@ class BrowserManager:
                                 
                 # Apply delay before returning
                 self._random_delay()
-                self._update_request_history(True)  # Track successful request
-                return True, self.driver, None
+                return True, self.driver, 200
                 
             except (TimeoutException, WebDriverException, NoSuchElementException) as e:
                 retries += 1
@@ -265,14 +289,8 @@ class BrowserManager:
 
                 res = requests.get(url)
                 if res.status_code == 429:
-                    print("Rate-limit detected for Selenium, rotating IP....")
-                    self.ip_rotator.rotate_elastic_ip()  
-        
-        # Log and track the failed request after max retries
-        self._log_failed_request(url, error_message, "selenium")
-        self._update_request_history(False)  # Track failed request
-        return False, None, error_message
-    
+                    return True, None, res.status_code
+                     
     def requests_get(self, url, parser='html.parser'):
         """
         Fetch a URL using requests with retry logic
@@ -285,10 +303,12 @@ class BrowserManager:
             tuple: (success (bool), soup or response, error message or None)
         """        
         retries = 0
+        res_status = None
         while retries < self.max_retries:
             try:
-                self.logger.info(f"Fetching {url} with requests (attempt {retries + 1})")
+                self.logger.info(f"Fetching {url} with requests (attempt {retries + 1}), {self.session}")
                 response = self.session.get(url, timeout=2)
+                res_status = response.status_code
                 
                 # Check for error status codes
                 response.raise_for_status()
@@ -303,8 +323,7 @@ class BrowserManager:
                 
                 # Parse the content
                 soup = bs4.BeautifulSoup(response.text, parser)
-                self._update_request_history(True)  # Track successful request
-                return True, soup, None
+                return True, soup, res_status
                 
             except Exception as e:
                 retries += 1
@@ -317,10 +336,8 @@ class BrowserManager:
 
         # Log and track the failed request after max retries
         self._log_failed_request(url, error_message, "requests")
-        self._update_request_history(False)  # Track failed request
-        return False, None, error_message
+        return False, None, res_status
 
-    
     def close(self):
         """Close all resources"""
         if self.driver:
