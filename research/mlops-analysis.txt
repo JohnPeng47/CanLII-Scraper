@@ -1,0 +1,228 @@
+I now have the full text of the paper. Here is the detailed analysis:
+
+---
+
+## Detailed Analysis: "We Have No Idea How Models will Behave in Production until Production" (arXiv 2403.16795)
+
+**Authors:** Shreya Shankar, Rolando Garcia, Joseph M. Hellerstein, Aditya G. Parameswaran (UC Berkeley)
+**Published:** Proc. ACM Hum.-Comput. Interact., Vol. 8, CSCW1, Article 206 (April 2024)
+
+---
+
+### 1. Problem Statement
+
+The paper addresses a fundamental clarity gap in MLOps. The field is widely acknowledged to be difficult — anecdotal reports cite that 90% of ML models never reach production, and 85% of ML projects fail to deliver value — but the *why* is poorly understood. Prior knowledge of MLOps consists largely of white papers, vendor case studies, startup ecosystems, and Sculley et al.'s 2015 technical-debt framing. None of this captures the lived, human-centered experience of the people actually responsible for keeping models running.
+
+The central gap: while data science workflows (pre-deployment) have been studied extensively through interview methods, the subsequent operationalization of ML — building, deploying, and sustaining production ML pipelines continuously over time — had not been studied from the perspective of the people doing it: ML Engineers (MLEs). Prior work either focused on different roles (data scientists, researchers) or studied isolated technical sub-problems rather than the end-to-end human workflow.
+
+The authors frame a specific scope: **repeated-use ML** (continuously generating predictions as part of a product or data pipeline) rather than single-use ML (one-time reports). This is the harder, less-studied problem.
+
+The title quote, spoken by interviewee Lg3, crystallizes the core tension: no amount of offline testing eliminates fundamental uncertainty about production behavior. That uncertainty does not go away with better tooling alone — it requires continuous human judgment.
+
+---
+
+### 2. Research Methodology: The Ethnographic Interview Study
+
+**Approach:** Semi-structured ethnographic interviews modeled after Spradley's ethnographic interview guidelines, combined with Grounded Theory for analysis.
+
+**Participants:** 18 ML Engineers across 6 recruitment rounds conducted over an academic year (2021–2022). Participants were screened to confirm they were personally responsible for the development, regular retraining, monitoring, and deployment of production ML models. They were not researchers or data scientists: they were self-declared MLEs working on repeated-use pipelines.
+
+**Diversity of the sample (Table 1):**
+- Company sizes: Small (<100 employees), Medium (100–1000), Large (1000+)
+- Application domains: Autonomous vehicles, ads, cloud computing, NLP, OCR, finance, banking, bioinformatics, cybersecurity, fintech, marketing, recommender systems, website builders
+- Experience: 5–15 years
+- Roles: MLEs and MLE managers
+- Geography: US-West, US-East, International
+
+**Recruitment strategy was iterative:** Round 1 drew from faculty professional networks, producing a US-West and large-company bias. Subsequent rounds used Discord (MLOps channels), Slack (mlops-community), and Twitter to diversify toward smaller companies and different sectors. Each round of interviews informed the next via concurrent analysis. Saturation was reached by the 16th interview, confirmed by the 17th and 18th.
+
+**Interview structure:** 45–75 minute video calls. Questions spanned six domains:
+1. Nature of ML task
+2. Modeling and experimentation ideas
+3. Transition from development to production
+4. Validation datasets
+5. Monitoring
+6. Response to bugs
+
+Interviews were auto-transcribed via Zoom, then de-identified before analysis.
+
+**Coding and analysis (Grounded Theory):**
+- **Open coding:** Transcripts were broken into discrete ideas and assigned codes (e.g., "A/B testing," "retraining cadence," "fallback models")
+- **Axial coding:** Codes were merged and grouped (e.g., "scenario testing" and "A/B testing" were grouped under "testing")
+- **Selective coding:** Five core themes were distilled: Tasks, Biz/Org Management, Operations, Bugs & Pain Points, Systems & Tools
+
+The final code system (Figure 3 in the paper) is a rich hierarchical structure with dozens of sub-codes across these five dimensions. Figure 2 shows color-coded transcript maps demonstrating roughly equal time allocation across themes, confirming breadth and balance.
+
+---
+
+### 3. Key Findings: The Four-Stage Workflow and the 3Vs of MLOps
+
+#### Four-Stage MLOps Workflow
+
+The paper identifies a workflow (Figure 1) distinct from prior data science workflow models:
+
+**(i) Data Preparation**
+
+Pipelines run on a schedule as DAGs (Directed Acyclic Graphs), typically daily, managed by dedicated data engineering teams. MLEs interface by loading outputs and extending DAGs with ML-specific nodes (feature computation, model retraining). Retraining cadences range from hourly to every few months, set by organizational convenience rather than any scientific principle — "finger to the wind" (Md5).
+
+Two non-automated pain points:
+- **Label quality at scale:** As labeling volume increases, label disagreements between annotators erode data quality. Organizations build human-in-the-loop pipelines that combine outsourced labeling with internal expert verification. Some use ML-based label quality estimators on top of outsourced labels.
+- **Feedback delays:** Ground-truth labels for live predictions often arrive weeks later. One participant (Sm2) reported: "I have no idea how well models actually perform on live data. Feedback is always delayed by at least 2 weeks." This disrupts retraining cadences and makes real-time performance assessment impossible. The workaround — manual labeling of live data by freelancers — was a 2–3 year effort at one organization.
+
+**(ii) Experimentation**
+
+Contrary to prior workflows that treat "modeling" as a distinct step, the paper finds that iterating on model architectures is only part of a broader experimentation phase. In production contexts, models are often inherited (e.g., "some of our models have been around for 6 or 7 years" — Md6). The primary mode of improvement is **data-centric**: adding new features, improving feature engineering, and expanding training data. Multiple participants independently stated that feature engineering yielded bigger gains than model architecture changes.
+
+Three sub-findings:
+- **Data over model:** MLEs prefer to fix the data rather than the model, because data iterations are faster and more often productive. This reverses older guidance that model iteration is more fruitful, reflecting the maturity of current ML libraries.
+- **Collaboration is essential:** Feature ideas emerge from social interaction — Slack conversations with data scientists, meetings with domain experts, cross-team goodwill-building. Organizations explicitly structure their culture around this.
+- **Manual experiment selection:** MLEs resist AutoML for experiment selection. They use experiment tracking tools (Weights & Biases, MLFlow) to record results but insist on choosing the next experiment themselves. The anti-pattern "keeping GPUs warm" — running experiments without a plan just to use available compute — was criticized. A guided, sequential search (one experiment at a time, building on prior results) was more productive than parallelized random search.
+
+**(iii) Evaluation and Deployment**
+
+The paper's most striking finding: evaluation and deployment are not sequential discrete phases but a single intertwined, manual, multi-stage process. Organizations deploy to progressively larger user fractions (test cluster → stage 1 → stage 2 → global), evaluating at each stage with human sign-off. Stages have different names across organizations (canary, shadow, A/B, staging) but the structure is consistent.
+
+Two key human-centered practices:
+- **Dynamic validation datasets:** Rather than fixed held-out sets (the academic norm), production engineers continuously update validation sets based on live failures. Some do this reactively (every failed prediction enters a queue, reviewed weekly, similar examples collected). Others do it proactively (constructing synthetic data representative of failure modes). High-stakes domains (autonomous vehicles) have dedicated teams for this. The datasets are adaptive by design.
+- **Product metrics for validation:** ML accuracy metrics (precision, recall, F1) are necessary but insufficient. Successful deployments tie model performance to business KPIs — click-through rate, user subscription rate, revenue. This requires explicit stakeholder alignment before deployment begins. Experiment ideas are only promoted to later stages if there is statistically significant improvement in the agreed product metric. MLEs coming from academia describe this as a "mindset shift."
+
+**(iv) Monitoring and Response**
+
+Organizations adopt Agile DevOps practices adapted to ML: on-call rotations (7–14 day shifts), incident reporting, and SLOs (Service-Level Objectives defined for pipeline performance).
+
+Three pain points:
+- **Data quality alert fatigue:** Engineers monitor features and predictions continuously, with automated alerts for schema violations, null values, value bounds, and embedding drift. But alert systems produce overwhelming false positives — one participant estimated 90% of alerts are non-critical. Engineers either ignore most alerts ("acknowledge internally") or mute them. The core problem: setting alert thresholds is not automated, and no one knows how to do it systematically. New engineers on on-call rotations "freak out" and need shadow periods to learn which alerts matter.
+- **Pipeline jungles:** Responding to production bugs by adding rule-based filters and heuristics (rather than retraining the model, which is slow and risky) creates accretions of hard-coded logic on top of learned models. These filters accumulate indefinitely; engineers are afraid to remove them even after models improve, because removal might cause cascading failures. Pipeline jungles are the result. This is Sculley et al.'s "technical debt" observed in practice, with specific mechanisms explained.
+- **Heavy-tailed bug distribution:** Most production ML bugs are unique and bespoke (a dropped apostrophe in a text preprocessing step, a corrupted imputation value for a feature, missing JSON keys in unstructured data). A small number of bugs are shared (label flipping, data leakage, random seed issues in distributed training). Bug detection is difficult because ML failures are often silent — models degrade gracefully rather than crashing. The recommended posture is "paranoia": scrutinize code, data, and model outputs proactively. Slicing and dicing sub-populations is the primary diagnostic technique.
+
+---
+
+#### The 3Vs of MLOps (Section 5.1)
+
+These are described as "three virtues of successful ML deployments that MLEs learn to balance and grow as they mature" — not a formal model but a synthesizing framework distilled from cross-cutting patterns in the data.
+
+**Velocity**
+
+Fast iteration is fundamental to ML: the goal is to go from a new idea to a trained, evaluated model as quickly as possible. The MLE's productivity is measured largely in "rate of experimentation" (Lg1 called this the "#1 KPI"). High velocity manifests in:
+- Data preparation pipelines on automated schedules
+- Multi-stage deployment as an optimistic strategy (deploy first, validate incrementally)
+- On-call rotations enabling rapid bug response
+- Config-file-driven experimentation (small, reviewable code changes)
+
+But unchecked velocity causes harm: practitioners "move fast, hack model performance," miss data quality issues, and create technical debt. High-velocity experimentation generates too many model versions to track cognitively.
+
+**Visibility**
+
+End-to-end observability of the entire pipeline — from raw data through features, model training, predictions, and business outcomes — is essential for both debugging and stakeholder alignment. Visibility manifests in:
+- Comprehensive logging at every pipeline stage
+- Dashboards for pipeline health
+- Jupyter notebooks (valued for their REPL-style interactivity and visualization, despite versioning weaknesses)
+- Feedback delay monitoring
+- Dynamic validation datasets that surface live failure modes
+- On-call rotations with incident reports that build organizational memory
+
+Visibility directly enables velocity: faster bug identification means faster fixes. It also enables stakeholder collaboration: product managers and business analysts can assess deployments using product metrics only if they can see pipeline progress.
+
+**Versioning**
+
+ML pipelines require versioning of not just code and models, but also data, features, data quality metrics, filters, and rules. This is significantly more complex than software versioning. Key versioning challenges:
+- On-call engineers need to compare current alerts to historical alerts to determine if something is actually broken
+- Engineers frequently inherit pipelines they did not build, requiring access to historical experiments and decision rationale
+- Pipeline jungles consist of multiple model versions for different customer segments, plus rule versions for edge cases
+
+Versioning enables velocity: maintaining multiple model versions (per-customer models, fallback models) avoids downtime. It enables visibility: inspecting old experiment versions reveals what was tried and why. But velocity and versioning tension: high-speed experimentation produces far too many versions to manage, leading to cognitive overload.
+
+**Tensions among the 3Vs:**
+- Velocity vs. Versioning: Fast experimentation creates unmanageable version proliferation
+- Velocity vs. Visibility: Moving fast (forking repos, skipping documentation) reduces observability
+- Versioning vs. Visibility: Comprehensive artifact versioning can create complexity that obscures the pipeline rather than clarifying it
+
+Mature MLEs learn to navigate these tensions deliberately rather than optimizing any one V in isolation.
+
+---
+
+### 4. Practical Insights for LLM Pipeline Deployment
+
+Though the paper predates the LLM deployment era (interviews were conducted 2021–2022), its findings map directly onto LLM pipeline challenges:
+
+**Prompt and output filtering as pipeline jungle precursors**
+The paper's description of language model filters is directly applicable to LLM systems. Md5 described a customer support chatbot: "The model might not have enough confidence in the suggested reply, so we don't return [the recommendation]...language models can say all sorts of things you don't necessarily want — if somebody asks when the business is open, the model might try to quote a time when it thinks the business is open. [It might say] '9 am,' but the model doesn't know that. So if we detect time, then we filter that reply. We have a lot of filters." This is a textbook description of how LLM output guardrail layers accumulate into pipeline jungles.
+
+**Sandbox stress-testing before deployment**
+Md5's chatbot sandbox ("you can pretend to be a customer and say all sorts of offensive things, and see if the model will say cuss words back at you") directly anticipates red-teaming practices for LLMs. The multi-stage deployment (sandbox → test cluster → partial users → full rollout) is exactly what responsible LLM deployment requires.
+
+**Feedback delay problem is severe for LLMs**
+For LLM pipelines, ground truth (whether a response was actually helpful, safe, accurate) arrives through user feedback signals that are sparse, delayed, and noisy. The paper's finding that feedback delays of 2+ weeks prevent real-time performance assessment maps directly onto RLHF and evaluation bottlenecks in LLM systems.
+
+**Dynamic evaluation sets are mandatory**
+Static benchmarks for LLMs (like static held-out test sets) become stale rapidly as user behavior, query distributions, and world knowledge evolve. The paper's finding that mature organizations maintain dynamic, continuously updated validation sets — built from live failure modes — is a direct prescription for LLM evaluation pipelines.
+
+**Product metrics must govern LLM deployment decisions**
+The finding that ML accuracy metrics (BLEU, perplexity, MMLU benchmark scores) are insufficient — that product KPIs (task completion rate, user retention, escalation rate to human agents) must govern deployment decisions — is essential for LLM systems, where benchmark performance consistently fails to predict real-world utility.
+
+**Versioning is particularly complex for LLMs**
+LLM pipelines involve versioning of: the base model, fine-tuning datasets, RLHF preference data, prompt templates, system prompts, output filters, retrieval corpora (for RAG), and embedding models. The paper's observation that managing all of these in tandem "is extremely challenging but vital to the success of ML deployments" is an understatement for LLM pipelines.
+
+**Alert fatigue on output quality monitoring**
+Automated content safety and quality classifiers on LLM outputs produce high false-positive rates. The paper's finding that 90% of alerts are non-critical, leading engineers to mute them or ignore them, is directly applicable to LLM monitoring where safety classifiers trigger excessively on benign content.
+
+**Data-centric experimentation over model changes**
+For organizations using foundation models, iterating on the model architecture is not available. The paper's finding that the biggest gains come from data-centric changes (better prompts, better retrieval, better fine-tuning data, better evaluation slices) is precisely the mode of experimentation available to LLM practitioners.
+
+---
+
+### 5. Limitations
+
+The authors are explicit about several limitations:
+
+**Scope is deliberately broad, sacrificing depth**
+The study aimed for cross-industry common patterns rather than deep investigation of any single context. As a result, differences attributable to company size, industry, or engineering maturity are not analyzed systematically. The paper acknowledges further interview studies focused on specific organizational contexts would be valuable.
+
+**Fairness, risk, and data governance were not probed**
+The interview questions did not explicitly ask about fairness, bias, regulatory compliance, or data governance. These are significant concerns in production ML, and their absence from findings reflects methodology, not their absence from practice.
+
+**Only MLEs were interviewed**
+Other stakeholders — product managers, data scientists, data engineers, software engineers, business analysts — are mentioned extensively in the findings as crucial collaborators, but none were interviewed. A study capturing multiple roles' perspectives on the same pipelines would provide a richer picture of organizational dynamics.
+
+**Temporal and geographic limitations**
+Recruitment was conducted during 2021–2022. The MLOps landscape has changed substantially since, particularly with the emergence of foundation models and LLM-specific tooling. US-West was overrepresented in early recruitment rounds.
+
+**Interview study limitations generally**
+Self-reported data is subject to recall bias and social desirability effects. Participants may have emphasized successes or described idealized practices. Participant action research or contextual inquiry (observing MLEs in their actual work environments) would provide more grounded data and is identified as a direction for future work.
+
+**Automated workflows not studied**
+The paper explicitly focuses on the human-centered workflow surrounding automated pipelines, not the automated pipelines themselves. The internals of CI/CD automation, automated retraining pipelines, and automated A/B test frameworks are not analyzed.
+
+---
+
+### 6. Relation to the Broader Field
+
+**Relation to prior MLOps literature**
+The paper positions itself against a fragmented prior literature consisting of: literature reviews (Kreuzberger et al. 2022, Paleyes et al. 2022), MLOps tool surveys, prescriptive best-practice papers, and case studies from individual organizations. It is the first interview study focused exclusively on ML Engineers responsible for repeated-use production models, and the first to describe a human-centered MLOps workflow grounded in systematic qualitative data collection.
+
+The paper confirms Sculley et al.'s 2015 "Hidden Technical Debt in Machine Learning Systems" in practice — pipeline jungles, CACE principle, cascading errors — but provides mechanistic explanations for *why* these problems emerge from actual practitioner behavior rather than theoretical analysis.
+
+**Relation to data science workflow literature**
+The paper builds on Wang et al.'s three-phase workflow (preparation, modeling, deployment) and refines it: data preparation is scheduled and recurring (not ad-hoc), modeling is replaced by broader experimentation (data-centric, not just model-centric), and deployment is tightly coupled with multi-stage evaluation (not a single event).
+
+It also builds on Kross and Guo's "outer loop" of client-facing data science, extending the collaborative and social dynamics to repeated-use ML pipelines where clients are internal product stakeholders rather than external clients.
+
+**Relation to CSCW/HCI**
+Published in the ACM CSCW proceedings, the paper emphasizes the collaborative and organizational dimensions of MLOps — on-call rotations as team coordination mechanisms, cross-team goodwill-building as a prerequisite for feature innovation, stakeholder alignment on product metrics as a design challenge. It positions MLOps not as a purely technical problem but as a sociotechnical one requiring HCI attention.
+
+**Contribution to the 3Vs framework**
+The 3Vs (velocity, visibility, versioning) are presented as a descriptive framework synthesized from practitioner experience, not a normative model. They complement but differ from other MLOps frameworks (e.g., Kreuzberger et al.'s principles of CI/CD automation, workflow orchestration, and reproducibility). The 3Vs are notable for explicitly naming *tensions* between the virtues — particularly the velocity-versioning tension and the velocity-visibility tension — which more prescriptive frameworks tend to ignore.
+
+**Implications for tool design**
+The paper's Section 5.2 translates findings into a set of specific tool design opportunities:
+- Intelligent retraining cadence determination (not "finger to the wind")
+- Labeling tools that handle both scale and quality with disagreement resolution
+- Documentation tools for failed experiments (tribal knowledge loss is a major pain point)
+- Multi-stage deployment streamlining to reduce months-long turnaround times
+- Smarter alerting systems that auto-tune thresholds over time and reduce false-positive fatigue
+- Filter and rule versioning alongside model versioning (pipeline jungle management)
+
+---
+
+**Source file:** `/home/user/CanLII-Scraper/research/pdfs/mlops-production.pdf`
+**Full extracted text used for analysis:** `/tmp/mlops-full.txt` (2,018 lines)

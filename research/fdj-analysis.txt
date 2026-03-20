@@ -1,0 +1,193 @@
+I now have enough information to provide a comprehensive analysis. Let me compile it.
+
+---
+
+## Detailed Analysis: FDJ — Featurized-Decomposition Join (arXiv 2512.05399)
+
+**Authors:** Sepanta Zeighami, Shreya Shankar, Aditya Parameswaran (UC Berkeley)
+**Published:** 5 December 2025
+
+---
+
+### 1. Problem Statement — What Is the Semantic Join Problem?
+
+A **semantic join** takes two tables (or string columns) L and R and a natural-language predicate p, and returns all pairs (l, r) ∈ L × R for which p evaluates to true when assessed by an LLM. Formally, the ground-truth answer set is Y = {(l, r) : Lp(l, r) = 1}.
+
+This generalises:
+- Traditional entity matching (e.g., matching marketplace product listings)
+- Multi-label classification (e.g., mapping patient notes to medical reaction terms)
+- Cross-document reference matching (e.g., linking police reports, eyewitness statements, and court filings that describe the same incident)
+
+The running motivating example is the California Police Records Access Project: journalists and public defenders must match thousands of police documents (eyewitness reports, testimonials, investigation reports, court filings) to determine which ones describe the same incident. Without automation this is done by hand.
+
+**The core computational problem:** a naive implementation calls the LLM on every pair in the cross product, costing Ω(n²) LLM invocations — prohibitive even for moderate n.
+
+**Why prior solutions fall short:** Existing methods (LOTUS, BARGAIN) use model cascades: they compute embedding cosine similarity as a cheap proxy score, reject pairs with low similarity as non-matches, accept pairs with high similarity as matches, and defer only "inconclusive" pairs to the LLM. The problem is that for long, complex documents with both relevant and irrelevant content, embedding vectors are poor proxies. In the police-records example, BARGAIN still defers to the LLM on approximately 80% of all record pairs — providing almost no saving versus the naive baseline.
+
+---
+
+### 2. Key Technical Approach — How Does Featurized Decomposition Work?
+
+FDJ's core insight is to **rewrite the natural-language join condition as an inexpensive logical expression over structured features extracted from the text**, rather than relying on global embedding similarity.
+
+#### 2a. The Featurized Decomposition
+
+A **featurized decomposition** Π is a Boolean function in **Conjunctive Normal Form (CNF)** over **featurized predicates**. Each featurized predicate π(l, r) has the form:
+
+> π(l, r) = I[d(X_L(l), X_R(r)) ≤ θ]
+
+where:
+- X_L, X_R are **feature extraction functions** (can use an LLM or generated Python code) that extract a specific piece of information from each record (e.g., "extract the date of the incident", "extract police officer names")
+- d is a lightweight **distance function** (semantic/embedding distance, lexical distance, or arithmetic difference — no LLM invocation at comparison time)
+- θ is a **threshold parameter**
+
+In the police records example, Π combines three predicates: one checking if extracted dates are within two days, one checking location similarity, and one checking officer name similarity.
+
+**Why CNF?** Conjunctions prune candidates aggressively (a pair must pass all clauses), while disjunctions within clauses add robustness (a pair passes a clause if any one of its predicates fires).
+
+#### 2b. Three-Phase Workflow
+
+**Phase 1 — Creating the featurized decomposition (offline):**
+
+*Step 1a — Candidate featurization generation (iterative):*
+FDJ samples a subset S of pairs from L × R, labels them via the LLM, and then runs an iterative loop:
+- It calls `get-featurization-from-examples`, a multi-step LLM pipeline that (i) generates high-level descriptions of useful featurizations, (ii) instantiates each as extraction functions (LLM-powered or code), and (iii) selects a distance function from a predefined menu.
+- It evaluates the current feature set using a "cost to cover" metric: for each positive pair (l, r), c_Φ(l, r) = min over featurizations φ of the number of negative pairs that must be admitted to correctly classify (l, r). If any positive pair has high cost to cover, those hard examples are fed back to the LLM as demonstrations to generate better featurizations.
+- This loop runs for up to max_iter iterations, terminating early if the cost to cover falls below threshold α for all pairs.
+
+*Step 1b — Logical scaffold construction (greedy):*
+Given the candidate featurizations Φ, FDJ constructs a **logical scaffold** Π̊(l, r; Θ) — a CNF expression with threshold parameters left free. The greedy algorithm:
+1. Starts with an empty scaffold (always returns True).
+2. At each step, finds the featurization φ whose addition as a new conjunct reduces the estimated join cost (false positive rate at optimal thresholds) the most. Adds it if the reduction exceeds a margin γ.
+3. After building the conjunction, iteratively tries adding each remaining featurization as a disjunct to each existing clause, again if cost reduces by more than γ.
+
+*Step 1c — Threshold setting with statistical guarantees (see Section 3 below):*
+A fresh sample S' is drawn and labeled. Thresholds Θ* are chosen to minimise the false positive rate on S' subject to an **adjusted recall target** T' > T, where T' is derived from a theoretical analysis ensuring the true recall on the full dataset meets T with probability ≥ 1 − δ.
+
+**Phase 2 — Inference:**
+Feature extraction functions are applied independently and linearly over all records in L and R. Then the CNF expression is evaluated over every pair in L × R using only cheap arithmetic/lexical/embedding comparisons (no LLM). Candidate set Ŷ = {pairs where Π = 1}.
+
+**Phase 3 — Refinement:**
+The LLM is called on every pair in Ŷ to remove false positives. This guarantees 100% precision. The recall guarantee is provided by the threshold-selection step.
+
+---
+
+### 3. Theoretical Guarantees
+
+The paper provides **statistical guarantees on both recall and precision** of the output.
+
+**Formal goal (Definition 2.1):** Given recall target T_R, precision target T_P, and failure probability δ, the algorithm must output Ŷ such that:
+> P(P(Ŷ) < T_P or R(Ŷ) < T_R) ≤ δ
+
+The default setting used in experiments is T_P = 100% (exact precision), T_R = 90%, δ = 10%.
+
+**NP-hardness (Theorem 4.2):** Finding the minimum-cost featurized decomposition is NP-hard, proved by reduction from Set Cover. This motivates the greedy approach.
+
+**Core statistical result (Theorem 6.1):** Let T' = adj-target(k+, r, T, δ), where k+ is the number of positive samples, r is the number of clauses, T is the recall target, and δ is the failure probability. For any threshold Θ* with observed sample recall ≥ T', the true recall on the full dataset satisfies:
+> P_{S~L×R}(R_{L×R}(Π̊, Θ*) < T) ≤ δ
+
+This holds whenever r ≤ 1/(1−T) and k+ > 1/(1−T). For the typical case T = 0.9, the condition requires k+ > 10 (in practice the paper uses 200 positive samples).
+
+**Key technical challenge — multi-dimensional threshold setting:** Prior cascade methods (LOTUS, BARGAIN) set a single one-dimensional threshold. FDJ's CNF with r predicates requires setting r thresholds simultaneously, creating a multiple-hypothesis-testing problem. A naive union bound would be too loose. The paper solves this by identifying the **worst-case dataset** D* (Lemma 6.2): the dataset that maximises the probability of a "bad" threshold being selected. D* has a specific sparse structure where each data point has non-zero distance in only one dimension, which minimises correlations across dimensions. The adjusted target T' is computed against D* via Monte Carlo simulation (run offline, data-independent).
+
+**Extension to relaxed precision:** When T_P < 1, a post-processing step uses the existing featurizations to identify high-precision subsets of Ŷ (applying the 1D threshold selection from BARGAIN [65]), reducing additional LLM calls.
+
+**Final guarantee (Theorem 7.1):** The full FDJ algorithm (Algorithm 6) satisfies the recall guarantee P(R(Ŷ) < T) ≤ δ.
+
+---
+
+### 4. Evaluation Results with Numbers
+
+**Datasets (Table 1):**
+
+| Dataset | \|L\| | \|R\| | n+ (ground-truth matches) |
+|---|---|---|---|
+| Products | 973 | 956 | 616 |
+| BioDEX | 8,103 | 3,718 | 20,000 |
+| Citations | 16,161 | 16,161 | 20,000 |
+| Movies | 4,043 | 4,983 | 10,475 |
+| Police Records | 2,093 | 2,093 | 56,531 |
+| Categorize | 19,101 | 3,144 | 20,000 |
+
+**Default parameters:** T_R = 90%, T_P = 100%, δ = 10%, 250 total labeled samples (50 positives for featurization and scaffold construction, 200 for threshold setting). LLMs: GPT-4.1 for feature extraction and join evaluation, O3 for featurization generation, text-embedding-large as embedding model.
+
+**Main results — cost ratio at T_R = 90% (Table 3):**
+Cost ratio = fraction of the naive all-pairs LLM cost. Lower is better.
+
+| Dataset | BARGAIN | FDJ | Reduction factor | Optimal cascade (oracle lower bound) |
+|---|---|---|---|---|
+| Citations | 28.0% | 6.80% | **0.24×** (≈4.1× cheaper) | 19.1% |
+| Police Records | 81.3% | 44.7% | **0.55×** (≈1.8× cheaper) | 66.6% |
+| Categorize | 27.6% | 23.0% | **0.83×** (≈1.2× cheaper) | 12.5% |
+| BioDEX | 73.9% | 73.8% | **0.99×** (essentially equal) | 72.6% |
+| Movies | 69.9% | 6.70% | **0.09×** (≈10.4× cheaper) | 52.5% |
+| Products | 36.2% | 25.0% | **0.69×** (≈1.4× cheaper) | 30.1% |
+
+Key takeaways:
+- FDJ improves over BARGAIN on **all 6 datasets**.
+- Best case (Movies): FDJ is **~10× cheaper** than BARGAIN and **~8× cheaper** than the theoretically-optimal cascade (which cheats by looking at all ground-truth labels to set thresholds).
+- On average, FDJ has about **half the cost** of BARGAIN.
+- FDJ beats the optimal cascade on Movies (6.7% vs 52.5%), Citations (6.8% vs 19.1%), and Products (25.0% vs 30.1%), demonstrating that featurized decompositions are fundamentally superior to embedding-similarity cascades for these datasets.
+
+**Failure rates (Table 2 — BioDEX, T_R = 90%, δ = 10%):**
+- LOTUS: fails to meet T_R on 75.4% of runs (average recall well below 80%)
+- BARGAIN: fails on 9% of runs (within the 10% budget)
+- FDJ: fails on 7% of runs (within budget)
+
+This motivates excluding LOTUS from the main comparison.
+
+**Sensitivity analysis:**
+- **Data size:** FDJ consistently outperforms BARGAIN across all data sizes tested (from n=250 to n=20,000).
+- **Recall target:** FDJ maintains its advantage from T_R = 75% to T_R = 95%. At higher targets, FDJ widens its advantage on Categorize, since embedding-based approaches degrade faster when required to be more comprehensive.
+- **Cost breakdown:** In most datasets, Refinement (LLM calls on Ŷ) dominates. Construction (scaffold building) and Inference (feature extraction + cheap comparisons) are negligible. For Movies, the featurization is so precise that Labeling (sampling) becomes the dominant cost.
+
+**Synthetic data experiments:**
+- Varying the number of persons mentioned per sentence (1–5): FDJ maintains near-zero cost ratio throughout. The optimal cascade degrades significantly as the count exceeds 1 (embeddings fail to represent multiple attribute values).
+- Varying text length: adding just two extra sentences (< 20 words) of irrelevant text causes the optimal cascade's cost ratio to drop sharply. FDJ remains robust.
+
+---
+
+### 5. Limitations
+
+The paper does not dedicate a separate limitations section but the following limitations are identifiable from the experimental analysis and discussion:
+
+1. **Feature decomposability requirement:** FDJ works best when the join condition is decomposable into a small set of extractable features. For tasks like Categorize and BioDEX (complex multi-label classification with intricate semantic mappings), FDJ provides only marginal gains over BARGAIN (0.99× and 0.83× cost ratios). The authors note that "classification may require a complex mapping across many features" that resists simple featurization.
+
+2. **NP-hard optimisation:** Finding the optimal featurized decomposition is NP-hard (Theorem 4.2), and FDJ uses a greedy heuristic. This may leave cost savings on the table, particularly for complex join conditions.
+
+3. **Reliance on LLM quality for feature generation:** The iterative featurization pipeline calls an expensive frontier model (O3) for generating candidate featurizations. If the LLM produces erroneous extraction functions or misses important features, the entire pipeline degrades. The iterative feedback loop (cost-to-cover analysis) is intended to correct this, but is not guaranteed to find all relevant features.
+
+4. **Theoretical conditions:** Theorem 6.1 requires r ≤ 1/(1−T) (number of CNF clauses bounded by 1/(1−T)) and k+ > 1/(1−T) (enough positive samples). For T = 0.9, this means at most 10 clauses and more than 10 positive samples. While the paper reports these conditions were never violated in practice, they could become binding in edge cases.
+
+5. **Asymmetric dataset performance:** On Police Records, FDJ achieves only 44.7% cost ratio versus BARGAIN's 81.3% — still a meaningful improvement, but the dataset remains expensive to join because features (dates, locations, officer names) exist but are noisy or missing in some records.
+
+6. **Upfront labelling cost:** FDJ requires 250 labeled pairs offline (50 for scaffold construction, 200 for threshold-setting). This fixed cost is amortised for large datasets but could be prohibitive for very small ones.
+
+7. **Precision-recall tradeoff:** The paper observes "limited cost saving from using a more relaxed precision target T_P for both BARGAIN and FDJ," so they keep T_P = 100%. This means the framework does not effectively exploit precision-recall trade-offs in practice, even though the theory supports it.
+
+---
+
+### 6. Relation to the Broader Field
+
+**Model Cascades / Cost-Efficient AI Data Processing:**
+FDJ is positioned within the model cascade tradition — using cheap proxy models to filter before invoking an expensive oracle. Prior work includes SUPG [Kang et al., VLDB 2020] and LOTUS [Patel et al., 2024] which use embedding similarity as the proxy. BARGAIN [Zeighami et al., SIGMOD 2026] (by the same authors) improves cascade threshold selection for 1D proxies. FDJ generalises this to a multi-dimensional, structured, CNF-based proxy. The key advance is that featurized predicates can be far more informative than global embedding similarity, especially for long documents with mixed relevant and irrelevant content — a phenomenon theoretically predicted by Weller et al. [2025] on the limitations of embedding-based retrieval.
+
+**Semantic / LLM-Powered Joins:**
+Semantic joins pre-date LLMs (sema-join [He et al., VLDB 2015]), but LLMs have become the standard solution. Industrial systems supporting them include Databricks AI Functions, Snowflake Cortex AISQL, AlloyDB AI, and MotherDuck's prompt() function. Open-source systems include LOTUS, DocETL, and pgai. FDJ can serve as a drop-in optimisation wrapper for any of these systems.
+
+**Entity Resolution:**
+ER is a classical sub-problem of semantic joins. Classical blocking methods [Bilenko et al., ICDM 2006; Kejriwal & Miranker, ICDM 2013] and deep-learning blocking [DeepER, DeepMatcher, AutoBlock] are related but operate on pre-structured tabular attributes rather than raw free-form text. FDJ automatically discovers and extracts attributes from raw text, bridging structured ER with unstructured semantic joins. FDJ allows a user-specified recall target (not hard zero-false-negative), which classical blocking approaches do not.
+
+**Decomposed Prompting and Multi-Step LLM Pipelines:**
+The iterative featurization generation pipeline follows decomposed prompting principles [Khot et al., 2022], breaking a complex task (featurization design) into modular LLM sub-tasks (describe feature → write extractor → choose distance function → validate), which improves reliability.
+
+**Batching:**
+A concurrent preprint [Trummer, arXiv 2510.08489] reduces semantic join costs through LLM batching. The authors note this is orthogonal to FDJ and could be combined to achieve further savings.
+
+**Approximate Query Processing:**
+FDJ's statistical guarantee framework is rooted in the SUPG framework for approximate selection with guarantees [Kang et al., VLDB 2020], extended from 1D to multi-dimensional (CNF) threshold selection. The novel Lemma 6.2 (identifying the worst-case dataset D* for the multi-dimensional adjusted target problem) is the key new theoretical contribution relative to prior cascade literature.
+
+---
+
+**Summary:** FDJ represents a qualitative shift in how semantic joins are optimised — from global embedding similarity to structured feature extraction and logical expression evaluation. It achieves up to a 10× cost reduction over the state of the art (BARGAIN) and up to 8× over the theoretically optimal cascade, while providing tight statistical guarantees on recall and perfect precision, across six real-world datasets spanning legal citations, entity matching, movie databases, biomedical classification, and police records.
+I now have sufficient content to provide a comprehensive analysis. Let me also check the remaining pages for any additional details on limitations.

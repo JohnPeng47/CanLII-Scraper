@@ -1,0 +1,199 @@
+Here is a thorough analysis of the MOAR paper (arXiv 2512.02289, updated through v3, January 2026):
+
+---
+
+## MOAR: Multi-Objective Agentic Rewrites for Unstructured Data Processing
+
+### 1. Problem Statement
+
+The paper addresses a fundamental gap in LLM-powered data processing systems: existing optimizers optimize for only one objective (accuracy or cost), not both simultaneously.
+
+The setting is **semantic operator pipelines**: user-authored sequences of operations (map, filter, reduce, etc.) where each operator's logic is specified in natural language and executed by an LLM. DocETL, the authors' prior system (3,200+ GitHub stars as of Nov 2025), let users build such pipelines but its original optimizer (DocETL-V1) only targeted accuracy and ignored cost.
+
+Two intertwined problems are identified:
+
+**Problem 1: No joint accuracy-cost optimization.** Users need a Pareto frontier of plans — not just the highest-accuracy plan — so they can choose based on their budget. A public defender's office processing 10,000 police reports may accept slightly lower accuracy to dramatically reduce inference costs.
+
+**Problem 2: No optimal substructure in LLM pipelines.** Traditional query optimizers (e.g., Cascades, dynamic programming) assume you can compose locally optimal subplans into a globally optimal plan. This fails for LLM pipelines because subplan interactions are unpredictable: a map that extracts smaller text spans may score higher in isolation but perform worse if the downstream reduce depends on richer context to deduplicate across chunks. Optimizing operators greedily upstream-to-downstream therefore misses globally beneficial sequences of rewrites.
+
+---
+
+### 2. Key Technical Approach: Multi-Objective Agentic Rewrites
+
+MOAR consists of two main components:
+
+#### A. Expanded Library of Rewrite Directives (30+ total, 18 new)
+
+A **rewrite directive** is an abstract transformation rule with a left-hand side (a pattern over operator types) and a right-hand side (specifying how to produce a new operator sequence). Unlike traditional algebraic rewrite rules, directives are "abstract" — an LLM agent must instantiate them concretely for the specific task and data.
+
+MOAR introduces two entirely new categories of directives targeting **cost reduction**:
+
+**Fusion and Reordering (4 new directives)**
+- Same-type fusion: `map → map` becomes a single `map` (fewer LLM calls)
+- Map-filter fusion: `map → filter` becomes a single `map` with a Boolean output attribute plus a code-powered predicate check, eliminating one LLM call per document
+- Filter-map fusion: analogous
+- Reordering: move cheaper operators earlier (like predicate pushdown in relational databases)
+
+**Code Synthesis (5 new directives)**
+- Code substitution: replaces an LLM-powered operator entirely with synthesized Python code
+- Code substitution for reduce: splits a reduce into a code-based aggregation step (counting, concatenating) plus a small LLM map for the logic that genuinely requires natural language reasoning
+- Code-based document compression: inserts a `code_map` that uses regex or keyword matching (synthesized by the agent, e.g., 50-100 keyword variants) to extract only relevant text from documents before the downstream LLM operator, shrinking token count
+- Head/tail compression: retains only the first h and last l words of each document via a code operator
+- Chunk sampling: after splitting documents into chunks, inserts a `sample` operator (using BM25, embeddings, or random sampling) to select only the relevant chunks before the LLM map
+
+**Extended existing categories (9 more new directives)**
+- Projection synthesis extensions: document summarization (LLM-written), LLM-based document compression via an `extract` operator that returns line ranges from documents
+- Data decomposition extensions: document sampling before reduce operations, cascade filtering (inserting cheap code filters and cheaper LLM filters before expensive LLM filters)
+- LLM-centric extensions: model substitution, prompt clarification, few-shot example injection, and an "arbitrary rewrite" meta-directive where the agent proposes free-form find-and-replace edits to the pipeline YAML
+
+Three new operator types support these directives: `sample` (subset selection via BM25/embeddings/random), `extract` (LLM outputs line ranges; preserves document structure at low output-token cost), and code-powered variants (`code_map`, `code_reduce`, `code_filter`).
+
+**Progressive disclosure for agents:** When the agent faces 30+ directives simultaneously, it struggles. Inspired by HCI's progressive disclosure principle, MOAR shows the agent only directive names and high-level descriptions first; when it selects a directive, it then loads the full specification (Pydantic instantiation schema, examples, test cases) on demand. The agent also has a `read_next_doc` tool to inspect sample data before committing to a directive instantiation.
+
+---
+
+### 3. Optimization Framework
+
+#### Search Space
+
+The search space is represented as a **tree** rooted at the user-authored pipeline P₀. Each node is a complete pipeline; each edge applies a single rewrite directive to produce a child pipeline. Unlike Cascades (which decomposes search into subproblems), MOAR always works on entire pipelines, reflecting the non-optimal-substructure property of LLM pipelines.
+
+#### Formal Objective
+
+Given an evaluation budget B (number of pipeline evaluations), MOAR selects a subset P_B of pipelines to evaluate and returns the approximate Pareto frontier F̂ = Pareto(P_B). Cost is monetary (token × price × volume, with code operators assigned zero cost). Accuracy is a user-supplied scoring function (F1, recall, etc.).
+
+#### Three Phases
+
+**Initialization:** MOAR evaluates P₀ with each model in the pool M (e.g., 11 LLMs including gpt-4o-mini, gpt-4o, gpt-4.1 variants, gpt-5 variants, gemini-2.5 variants). This creates initial model-variant children. Then, for each frontier pipeline, MOAR generates exactly two rewrites (one targeting accuracy, one targeting cost). Non-frontier model variants are disabled from further selection.
+
+**Selection (UCT-based multi-armed bandit):** MOAR uses **UCT (Upper Confidence Bound for Trees)**, adapting the UCB algorithm to the tree structure of the search space. The utility score for each pipeline P is:
+
+```
+U_t(P) = [δ_t(P) + Σ_{P' ∈ desc_t(P)} δ_t(P')] / n_t(P)   (exploitation)
+          + sqrt(2 ln n_t(parent(P)) / n_t(P))               (exploration)
+```
+
+The key innovation is the **exploitation metric** δ_t(P): the vertical distance between P's accuracy and the best accuracy achievable at the same or lower cost (i.e., P's marginal contribution to the Pareto frontier). This is preferred over the standard hypervolume metric because low-accuracy pipelines vastly outnumber high-accuracy ones, and hypervolume would waste the budget exploring low-accuracy regions.
+
+**Progressive widening** caps the number of children a node can have at √n_t(P) (sublinear in visit count). This prevents any single pipeline from monopolizing the budget with hundreds of immediate variants before exploring deeper rewrite sequences.
+
+**Rewriting and evaluation:** A gpt-5 LLM agent selects a directive (after pruning cycles and no-ops), instantiates it concretely, and the resulting pipeline is executed on a sample D_o (40 documents). For parameter-sensitive directives, the agent generates two instantiations (e.g., precision-focused vs. recall-focused) and picks the higher-accuracy one. Three parallel workers handle rewriting and evaluation simultaneously. Cached results are reused if identical pipelines are encountered again.
+
+---
+
+### 4. Evaluation Results (with Numbers)
+
+**Setup:** 6 workloads, 40-pipeline evaluation budget per workload. gpt-5 as the optimizer agent. Pool of 11 models. 40 documents for optimization sample; 100 held-out documents for testing.
+
+**Workloads:**
+- CUAD: legal contract clause extraction (510 contracts, ~7,700 words each), F1 metric
+- Game Reviews: Steam reviews (300 reviews/game, ~97,700 words/doc), composite metric
+- BlackVault: declassified paranormal articles (733 docs, ~7,400 words), recall of distinct locations
+- Biodex: biomedical adverse drug reaction linking (~71,000 words/paper), rank-precision@5
+- MEDEC: medical error detection in clinical notes (3,848 notes, ~147 words each), composite F1 + Jaccard
+- Sustainability: corporate ESG reports (5,436 reports, ~38,700 words), accuracy composite
+
+**Accuracy (Table 4, best accuracy per method):**
+
+| Workload | DocETL-V1 | Simple Agent | LOTUS | PZ/ABACUS | MOAR |
+|---|---|---|---|---|---|
+| CUAD | 0.471 | 0.521 | 0.402 | 0.694 | **0.762** |
+| Game Reviews | 0.608 | 0.467 | 0.522 | 0.260 | **0.804** |
+| BlackVault | 0.143 | 0.194 | 0.081 | 0.260 | **1.000** |
+| Biodex | 0.247 | 0.333 | 0.202/0.296 | 0.260/0.296 | **0.370** |
+| MEDEC | 0.534 | 0.726 | 0.538 | 0.536 | **0.742** |
+| Sustainability | 0.632 | 0.543 | 0.516 | — | **0.646** |
+
+- MOAR achieves the highest accuracy on every single workload
+- Average relative gain over next-best: DocETL-V1 +130.71%, Simple Agent +94.36%, LOTUS +209.53%, PZ +26.65%
+- vs. ABACUS specifically: **27% higher accuracy on average**
+- Largest single gain: BlackVault, +415.5% over ABACUS
+
+**Cost savings (Table 5 — cost of cheapest MOAR plan matching each baseline's best accuracy):**
+
+| Workload | vs. DocETL-V1 | vs. Simple Agent | vs. LOTUS | vs. PZ |
+|---|---|---|---|---|
+| CUAD | 0.073× | 0.377× | — | 0.290× |
+| Game Reviews | 0.072× | — | 0.071× | 0.003× |
+| BlackVault | 0.267× | 0.497× | — | n/a |
+| Biodex | 0.152× | 0.196× | 0.145× | 1.840× |
+| MEDEC | 0.840× | 0.966× | 1.245× | 0.046× |
+| Sustainability | 0.133× | 0.143× | — | n/a |
+
+- MOAR matches ABACUS's best accuracy at **0.545× (55%) of its cost** on average
+- Matches simple agent at 0.436× cost, LOTUS at 0.487×, DocETL-V1 at 0.256×
+- Most dramatic: Game Reviews, where MOAR matches PZ's best accuracy at 0.003× the cost (99.7% cheaper)
+
+**Optimization overhead:**
+- MOAR's optimization cost is **2.11× that of ABACUS**, but optimization latency is only **0.562× that of ABACUS** (due to parallelism)
+- Optimization is a one-time cost amortized over repeated pipeline executions
+
+**Pipeline characteristics (from top-5 accuracy pipelines per workload, 29 total):**
+- 86% use a modified logical plan structure (not just tuning within the original plan)
+- 79% use projection synthesis (compression/summarization before LLM operators)
+  - 55% of those use deterministic code methods (regex, keyword matching)
+  - 17% use embedding-based pruning
+  - 14% use LLM-powered summarization
+- 48% incorporate agent-authored code operations
+- All 29 switch away from gpt-4o-mini (the default); different workloads use different optimal models
+- gpt-5-nano is the most prevalent model in top-accuracy pipelines (41% of operator uses), specialized for extraction and classification
+- 51.72% of top-accuracy pipelines were discovered after iteration 20 of 40; 34.48% after iteration 30 — demonstrating sustained exploration without premature convergence
+- Top pipelines use on average **2.3× as many operators** as baseline pipelines
+
+**Accuracy-cost trade-offs are steep:** The second-highest accuracy pipeline per workload is on average 18.81% less accurate but 66.36% cheaper. For CUAD, the second-best is 91.34% cheaper with only a 2.07% accuracy drop.
+
+---
+
+### 5. Limitations
+
+The paper is candid about several limitations:
+
+**Search efficiency:** The search algorithm relies on expensive gpt-5 calls for directive instantiation. The authors identify two improvement directions: (1) reducing reliance on frontier LLMs for rewriting via learned models or heuristics, and (2) estimating accuracy/cost without executing pipelines on samples.
+
+**Accuracy estimation via sampling:** MOAR evaluates on 40-document samples, so accuracy estimates are noisy. ABACUS's adaptive sampling (which tightens accuracy bounds for frontier candidates using multi-armed bandits) could be integrated into MOAR's pipeline selection but is currently not — the authors note this as future work.
+
+**Optimization cost is high:** MOAR's optimization costs range from $16.73 (MEDEC) to $188.20 (Biodex), and $44-79 for the others. This is 2.11× ABACUS's cost. While amortized over repeated executions, one-time optimization is expensive.
+
+**Directive instantiation costs not modeled:** Parameter-sensitive directives generate multiple candidates and evaluate each; the current system doesn't account for varying directive instantiation costs in the search algorithm, meaning the effective per-iteration budget cost is variable.
+
+**Two workloads where MOAR doesn't dominate fully:** For MEDEC, MOAR costs 1.245× LOTUS to match LOTUS's best accuracy (though MOAR's peak accuracy is 20 percentage points higher than LOTUS's peak). For Biodex, MOAR costs 1.840× PZ-r&r to match its accuracy (though MOAR still finds a more accurate pipeline overall).
+
+**MEDEC headroom limitation:** On short-document workloads like MEDEC (avg 147 words per note), the simple baseline of just switching to a better model captures most gains, leaving little room for structural rewrites. This is a general limitation: MOAR's structural transformations add less value on short, simple documents.
+
+**Progressive widening is heuristic:** The child cap of √n_t(P) is inherited from Monte Carlo Tree Search literature and not theoretically grounded for this specific setting.
+
+---
+
+### 6. Relation to DocETL and the Broader Field
+
+#### Relation to DocETL
+
+MOAR is built directly on top of DocETL's infrastructure — the DSL, YAML parser, and execution engine. It is described as the new DocETL optimizer, incorporating approximately 16,000 new lines of Python (out of DocETL's 30,000+ total). The relationship is:
+
+- **DocETL-V1** introduced the rewrite directive concept and 13 original directives, all targeting accuracy. It used a top-down, upstream-to-downstream search strategy that still roughly assumes optimal substructure. It uses LLM-as-judge to select plans (not ground-truth labels). It returns a single optimized plan.
+- **MOAR** doubles the directive count to 30+, adds two new directive categories targeting cost, introduces global search over complete pipelines without optimal substructure assumptions, and returns a full Pareto frontier.
+
+The paper explicitly notes that MOAR's techniques could extend to other semantic operator systems beyond DocETL.
+
+#### Relation to Broader Field
+
+The paper positions MOAR within a 2×2 taxonomy of rewrite types (Figure 5 in the paper):
+
+|  | Rule-based | Agentic |
+|---|---|---|
+| Data-independent | model substitution, ensembling, operator reordering | operator fusion, task decomposition |
+| Data-dependent | model cascades, fine-tuning, RAG | most MOAR directives |
+
+MOAR is the only optimizer that spans all four quadrants. Its key differentiators vs. the field:
+
+**vs. LOTUS (Patel et al.):** LOTUS introduces semantic operators and optimizes only cost (model swapping for filters/joins/group-bys). It does not search across different pipeline rewrites — it considers only one optimized implementation per operator and returns a single plan. It does not address accuracy jointly with cost.
+
+**vs. ABACUS/Palimpzest (Russo et al.):** ABACUS is the closest prior work — it uses the Cascades framework adapted for Pareto frontier search, and supports model selection, prompting strategies, and ensembling. Key differences: (1) ABACUS assumes optimal substructure (Cascades framework), which the authors demonstrate leads to suboptimal plans; (2) ABACUS has a narrower rewrite space (no operator fusion, code synthesis, or agentic data-dependent rewrites); (3) ABACUS does not support LLM-powered reduce operators; and (4) MOAR achieves 27% higher accuracy at 55% of ABACUS's cost.
+
+**vs. traditional query optimizers (Selinger, Cascades, Volcano):** These use dynamic programming with optimal substructure. This assumption breaks for LLM pipelines because LLM operator output quality depends on context from upstream operators. MOAR's tree-based global search over complete pipelines is a principled alternative.
+
+**vs. DSPy (Khattab et al.):** DSPy compiles declarative LLM pipelines using few-shot example optimization and prompt tuning, but operates on fixed pipeline structures and does not search over structural rewrites (operator decomposition, fusion, code synthesis).
+
+**vs. the broader LLM data processing ecosystem:** Industrial systems from Databricks, Snowflake (Cortex AISQL), Google BigQuery, and AlloyDB now support LLM-powered SQL functions, but without agentic query optimization. DocETL/MOAR's declarative, optimizer-driven approach is positioned as a research alternative.
+
+The paper's most technically original contributions to the query optimization literature are: (1) formalizing the lack of optimal substructure in LLM-powered data processing and designing a search algorithm that avoids this assumption; (2) the marginal accuracy contribution metric (δ_t) as an alternative to hypervolume for multi-objective bandit selection in settings where high-accuracy plans are rare; and (3) the expanded directive taxonomy covering all four quadrants of the data-dependent/independent × rule-based/agentic space.

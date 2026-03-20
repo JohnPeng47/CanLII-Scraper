@@ -1,0 +1,175 @@
+I'll read the PDF thoroughly before providing the analysis.
+I now have a thorough read of the full paper. Here is a detailed analysis:
+
+---
+
+# EvalGen: "Who Validates the Validators?" — Detailed Analysis
+
+**Citation:** Shankar, Zamfirescu-Pereira, Hartmann, Parameswaran, Arawjo. arXiv:2404.12272, April 2024. UC Berkeley / Université de Montréal.
+
+---
+
+## 1. Problem Statement
+
+The paper targets what it calls the **automated-evaluation alignment problem**: LLMs are increasingly used as "judges" to evaluate other LLM outputs (e.g., grading whether a response is "concise" or "not apologetic"), but these evaluator LLMs are themselves unreliable. They inherit all the pathologies of the models they judge — sensitivity to prompt wording, ordering bias, hallucination, and context-window effects. Existing LLMOps tools (promptfoo, ChainForge, EvalLM, PromptsRoyale) offer little or no mechanism to verify that an LLM-generated evaluator actually reflects what the human developer wants.
+
+Two compounding failure modes are identified:
+- **Over-trust**: Users tend to accept AI-generated evaluations without scrutiny (documented in prior incidents, e.g., MIT GPT-4 exam claim debunked by Chowdhuri et al.).
+- **Over-generalization**: Developers draw sweeping conclusions from a small sample of manually inspected outputs, even when automated pipelines exist.
+
+The core question is: *How do you validate the validators?* That is, how do you align LLM-generated evaluation functions with actual human preferences, with minimal additional human effort?
+
+---
+
+## 2. Key Technical Approach: Mixed-Initiative Evaluation Alignment
+
+EvalGen's central insight is to **interleave human grading with automated candidate assertion generation**, rather than treating them as sequential phases. The alignment happens in the background while the user waits, making the process nearly zero-cost in terms of additional time.
+
+**The pipeline has three logical stages:**
+
+### Stage 1 — Criteria Suggestion
+GPT-4 is prompted with the user's LLM prompt template to propose binary natural-language criteria (e.g., "response does not contain PII," "output uses markdown format"). The user can accept, reject, edit, or add criteria. They also choose per-criterion whether the evaluator should be code-based (Python) or LLM-based (a grader prompt).
+
+### Stage 2 — Candidate Assertion Synthesis and Online Execution
+For each criterion, GPT-4 generates multiple candidate implementations — either Python functions or LLM grader prompts. These are generated and executed asynchronously (streaming). As each candidate is produced, EvalGen:
+- Executes it immediately against all LLM pipeline outputs.
+- Culls obviously broken implementations (Python runtime errors).
+- Maintains a dynamic **selectivity** estimate: the probability that the assertion passes a given output.
+
+### Stage 3 — Grading-Guided Assertion Selection (the core alignment mechanism)
+While waiting for generation and execution to complete, the user grades a sample of LLM outputs with a simple thumbs-up / thumbs-down binary. EvalGen uses an **alternating sampling policy** that prioritizes outputs likely to be of borderline quality (based on selectivity scores), rather than random sampling, to elicit maximally informative grades quickly.
+
+Human grades act as a weak supervision signal. Each grade updates:
+- The alignment score for each candidate assertion per criterion.
+- The **confidence score** for each LLM output (a weighted sum of selectivity scores of assertions that fail it).
+
+**Alignment** is defined as the harmonic mean of:
+- **Coverage** (true negative rate among user-labeled bad outputs — i.e., does the assertion catch the bad ones?)
+- **1 - False Failure Rate** (the assertion does not flag outputs the user considered good)
+
+At grading conclusion, for each criterion, EvalGen selects the candidate assertion with the highest alignment score, subject to a user-configurable false-failure-rate threshold. This is shown on a **Report Card** screen with per-criterion confusion matrices.
+
+The key design principle: the user spends time they would have spent waiting anyway on grading, converting dead time into supervision signal.
+
+---
+
+## 3. System Design
+
+EvalGen is embedded inside the open-source tool **ChainForge**, extending it with:
+
+- A **Multi-Eval node**: runs multiple evaluators in a single node against the outputs of a pipeline stage.
+- A **pop-up wizard** with three entry points:
+  - **Infer**: auto-generate criteria from the prompt template, then grade.
+  - **Manual**: write criteria yourself, then grade.
+  - **Grade First**: grade 5+ outputs before even seeing criteria suggestions, with the grades informing both criteria suggestion and subsequent alignment.
+- A **Pick Criteria screen**: displays GPT-4-suggested criteria with toggles for Code vs. LLM evaluator type, all editable.
+- A **Grading screen**: shows a single LLM output centered, with the prompt context and input variables visible. Good/Bad buttons. Navigation arrows to revise prior grades. An "I'm Tired" button to terminate early.
+- A **Report Card screen**: per-criterion alignment scores with hoverable confusion matrices, aggregate coverage and false-failure-rate statistics.
+- A **Table View**: matrix of all outputs vs. all assertions, showing pass/fail per cell.
+
+**Architectural components (implementation):**
+
+| Component | Role |
+|---|---|
+| Criteria Suggester | GPT-4 call with user's prompt template |
+| Assertion Synthesizer | GPT-4 generates multiple candidates per criterion, streamed |
+| Executor | Runs candidates against all pipeline outputs immediately on detection |
+| Grading Sampler | Alternating sampling policy driven by selectivity confidence scores |
+| Alignment Calculator | Online harmonic-mean of coverage and (1-FFR) per candidate, updated per grade |
+| Report Card | Selects top-aligned assertion per criterion, displays confusion matrices |
+
+---
+
+## 4. User Study and Evaluation Results
+
+### Offline Algorithm Evaluation (Section 5)
+
+Two pipelines tested:
+- **Medical pipeline**: 84 doctor-patient transcript outputs; task = extract structured info without PII. 68% "good" outputs.
+- **Product pipeline**: 100 Amazon product description outputs; task = SEO-optimized descriptions. 51% "good" outputs.
+
+Ground truth labels established by two paper authors grading all outputs. EvalGen was given only 16 grades per pipeline (simulating realistic session lengths). Baseline: SPADE (fully automated, solves an integer linear program, uses all labeled outputs, no human criteria input).
+
+**Results (Table 1):**
+
+| Metric | Medical - EvalGen | Medical - SPADE | Product - EvalGen | Product - SPADE |
+|---|---|---|---|---|
+| # Assertions | 3 | 5 | 4 | 9 |
+| Coverage | 0.33 | 0.33 | **0.73** | 0.49 |
+| FFR | 0.10 | 0.10 | 0.39 | 0.39 |
+| Alignment (%) | 48.29 | 48.29 | **66.46** | 54.35 |
+
+EvalGen matched SPADE on the medical pipeline with 40% fewer assertions. On the product pipeline, EvalGen produced less than half the assertions (4 vs. 9), raised coverage from 49% to 73%, and raised alignment from 54% to 66%. The qualitative gap: SPADE generated pragmatically irrelevant assertions (e.g., flagging specific phrases like "never order" or "disappointed" with brittle string matching, or adding a "neutral tone" criterion nobody asked for).
+
+**Sampling policy evaluation (Appendix A.4):** Four policies tested (random, highest-sigma, lowest-sigma, alternating) across 10 trials each. Random sampling showed high variance in resulting alignment. All non-random policies outperformed random consistently; the alternating policy was chosen for the interface.
+
+### Qualitative User Study (Section 6-7)
+
+- **Participants**: 9 industry practitioners (software engineers, ML scientists, startup executives, consultants), recruited via Twitter. All had production LLM pipeline experience.
+- **Task**: Named Entity Recognition (NER) on 100 tweets using a provided GPT-3.5-Turbo pipeline. Participants could modify the task. 3 did (1 switched to sentiment analysis).
+- **Procedure**: 45-75 minute Zoom sessions. Think-aloud protocol, remote screen control, open/axial coding of transcripts.
+- **Post-session**: 7-point Likert scale rating on "I felt like the assertions aligned with my grades."
+
+**Key findings:**
+
+**Finding 1 — EvalGen as a useful starting point.** 8/9 participants found LLM-generated criteria suggestions accurate and helpful for overcoming "writer's block." One described wanting "the AI to do 80% of it, and escape hatches if the AI fails."
+
+**Finding 2 — Grading-first is underappreciated.** The 2 participants who chose "Grade First" found it invaluable; participants who didn't often expressed retrospective regret. P2: "you should enforce that we all look at at least 20 examples first."
+
+**Finding 3 — Grading-while-waiting works.** 8/9 participants found grading during generation to be productive use of waiting time. The exception wanted visibility into what EvalGen was doing with their grades in real time.
+
+**Finding 4 — Criteria drift (the paper's central empirical finding, Section 7.3.1).** All participants showed evidence of criteria changing as they graded:
+- **New criteria discovered mid-grading**: Participants saw outputs that revealed failure modes they hadn't anticipated, wanting to add criteria after the fact (but couldn't without restarting EvalGen).
+- **Existing criteria reinterpreted**: A "proper nouns" criterion that initially meant "all entities must be proper nouns" evolved to "most entities should be proper nouns" after participants saw the actual distribution of outputs. A "no hashtags" criterion split into two incompatible interpretations across participants (P5 wanted hashtag-entities excluded entirely; P9 wanted them extracted without the # symbol).
+
+The catch-22: you need criteria to grade outputs, but you need to grade outputs to know your criteria. This is not a solvable initialization problem — it is intrinsic to the evaluation process.
+
+**Finding 5 — Alignment perception is polarized.** Likert ratings for "assertions aligned with my grades": 6, 5, 3, 4, 5, 3, 1, 2, 5. Mean ~3.8/7. Users with low ratings often acknowledged their own uncertainty as the cause ("I think I was unsure of my criteria while grading").
+
+**Finding 6 — Code vs. LLM evaluator affordances differ.** Developers with coding expertise wanted to see and directly select code implementations rather than having EvalGen pick for them. LLM-based assertions were trusted less overall (harder to inspect) but preferred for "fuzzy" criteria. Multiple participants were skeptical about deploying LLM-based evaluators in production monitoring contexts.
+
+**Finding 7 — Users wanted grades to feed back into candidate generation.** Participants wanted their labeled examples included as few-shot examples in grader prompts, creating an optimization loop akin to DSPy.
+
+---
+
+## 5. Limitations
+
+The authors acknowledge the following directly:
+
+1. **Small offline evaluation scope**: Only 2 pipelines tested. The alignment algorithm's behavior may differ substantially across different task domains, output distributions, and criteria types.
+
+2. **Small and homogeneous user study sample**: 9 participants, all with significant LLM production experience. Findings may not generalize to less expert users (e.g., domain experts without ML background, product managers, researchers). The paper explicitly notes this.
+
+3. **No deployment phase coverage**: The study ended after assertion set creation; how assertions behave in production monitoring, under model drift or prompt updates, was not studied.
+
+4. **Binary grading signal is noisy and coarse**: Thumbs-up assumes the output passes all criteria; thumbs-down provides no breakdown of which criterion failed. This is an acknowledged design trade-off, not a solved problem.
+
+5. **Criteria drift is unmitigated in the current design**: EvalGen does not yet support dynamic criteria revision mid-session. Users who discover new criteria must exit and restart.
+
+6. **Criteria dependence on specific outputs (deeper limitation)**: The paper raises this as a fundamental epistemic problem: if criteria are partly determined by observing the specific outputs of a particular model with a particular prompt, then any change to the model, prompt, or input distribution potentially invalidates the criteria. There is no clean solution offered — it is posed as an open question for the field.
+
+7. **No multi-user / collaborative evaluation**: Inter-rater reliability and disagreement handling for team-based grading are discussed as future work, not implemented.
+
+8. **Single false-failure-rate threshold applied globally**: Participants wanted per-criterion FFR thresholds (some criteria are safety-critical; others are nice-to-have). This is identified but not implemented.
+
+---
+
+## 6. Relation to the Broader Field
+
+**LLM-as-a-judge literature**: EvalGen directly challenges the assumption underlying MT-Bench, Chatbot Arena, and similar frameworks that LLM judges are trustworthy at face value. It operationalizes the skepticism from work showing LLM evaluators are sensitive to position bias (Li et al. 2023), ordering effects (Wang et al. 2023), and prompt formatting (Sclar et al. 2023).
+
+**Interactive Machine Learning (iML)**: The paper draws explicitly on iML's iterative human-model feedback loop paradigm. It differentiates EvalGen from classical iML by noting that LLMs lack training data in the traditional sense — users are prototyping with imagined inputs, not curating labeled datasets. The mixed-initiative design (Patel et al., Simard et al.) is applied specifically to the evaluation-of-evaluators domain.
+
+**SPADE** (Shankar et al. 2024, same first author): EvalGen's alignment algorithm is a human-in-the-loop extension of SPADE, which automatically synthesizes Python assertions from prompt revision history using integer linear programming. EvalGen replaces SPADE's offline optimization with an online streaming approach and adds human criteria selection, grading, and alignment feedback.
+
+**Prompt optimization tools (DSPy, PromptBreeder, AutoCalibrate, EvoPrompt)**: EvalGen occupies the upstream position in the LLMOps lifecycle — before you can optimize a prompt automatically, you need reliable evaluation functions. EvalGen is positioned as enabling this prerequisite. Participants even independently suggested using labeled outputs as few-shot examples in grader prompts, converging on a DSPy-style optimization loop.
+
+**HCI and evaluation design**: The criteria drift finding resonates with grading rubric research in educational contexts (Gradescope, Singh et al. 2017), where instructors routinely update rubrics as they encounter unexpected student answers. The paper draws an analogy to Justice Potter Stewart's "I know it when I see it" (Gewirtz 1996) to argue that evaluation subjectivity is not irrational — it reflects genuine epistemic complexity that cannot be fully externalized prior to observation.
+
+**Broader implications for "alignment"**: The paper questions whether alignment with human preferences is an achievable endpoint or perpetually a work-in-progress. Since criteria depend on the specific distribution of model outputs, any form of distribution shift (model drift, prompt edits, upstream data changes) can render previously established criteria and evaluators obsolete. This frames evaluation alignment not as a problem to be solved once, but as a continuous process requiring ongoing human engagement.
+
+---
+
+## Summary
+
+EvalGen makes three distinct contributions: (1) a practical mixed-initiative system that converts user waiting time into grading signal to select better-aligned LLM evaluators, (2) an empirical comparison showing this human-guided approach outperforms fully automated baselines (SPADE) with fewer assertions and better coverage, and (3) the identification of **criteria drift** as a fundamental phenomenon that challenges any evaluation framework premised on the independence of evaluation criteria from the observed outputs they assess. The last finding has the deepest implications: it suggests that LLM evaluation frameworks that presuppose settled, expert-labeled criteria are systematically misaligned with actual developer practice.
