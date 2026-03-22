@@ -1,0 +1,412 @@
+[
+  {
+    "company": "Datadog",
+    "ticker": "DDOG",
+    "comparisons": [
+      {
+        "metric": "Revenue FY2023",
+        "edgar_value": 1028.784,
+        "analyst_implied": 2125.6783919597992,
+        "pct_diff": 106.62047543116913
+      },
+      {
+        "metric": "Revenue FY2022",
+        "edgar_value": 603.466,
+        "analyst_implied": 2125.6783919597992,
+        "pct_diff": 252.24493044509538
+      },
+      {
+        "metric": "Gross Margin FY2025",
+        "edgar_value": 79.95549081775629,
+        "analyst_value": 81.9,
+        "diff_pp": 1.9445091822437206
+      },
+      {
+        "metric": "EBITDA Margin FY2025",
+        "edgar_gaap_ebitda_margin": 0.14084556358358735,
+        "edgar_adj_ebitda_margin": 22.04444615626125,
+        "analyst_value": 26.8,
+        "closer_to": "ADJUSTED (SBC added back)",
+        "sbc_millions": 750.671
+      },
+      {
+        "metric": "Revenue Growth FY2022-FY2023",
+        "edgar_value": 70.47919849668416,
+        "analyst_value": 27.7,
+        "diff_pp": -42.77919849668416
+      },
+      {
+        "metric": "Revenue Growth FY2023-FY2024",
+        "edgar_value": 62.82329429695641,
+        "analyst_value": 27.1,
+        "diff_pp": -35.72329429695641
+      }
+    ]
+  },
+  {
+    "company": "NetApp",
+    "ticker": "NTAP",
+    "comparisons": [
+      {
+        "metric": "Revenue FY2023",
+        "edgar_value": 5744.0,
+        "analyst_implied": 6238.25,
+        "pct_diff": 8.604630919220057
+      },
+      {
+        "metric": "Revenue FY2022",
+        "edgar_value": 5412.0,
+        "analyst_implied": 6238.25,
+        "pct_diff": 15.2669992609017
+      },
+      {
+        "metric": "EBITDA Margin FY2025",
+        "edgar_gaap_ebitda_margin": 23.326232501521606,
+        "edgar_adj_ebitda_margin": 29.199634814363968,
+        "analyst_value": 31.0,
+        "closer_to": "ADJUSTED (SBC added back)",
+        "sbc_millions": 386.0
+      },
+      {
+        "metric": "Revenue Growth FY2022-FY2023",
+        "edgar_value": 6.134515890613452,
+        "analyst_value": 21.8,
+        "diff_pp": 15.665484109386549
+      },
+      {
+        "metric": "Revenue Growth FY2023-FY2024",
+        "edgar_value": 9.993036211699165,
+        "analyst_value": -0.9,
+        "diff_pp": -10.893036211699165
+      }
+    ]
+  },
+  {
+    "company": "Pure Storage",
+    "ticker": "PSTG",
+    "comparisons": [
+      {
+        "metric": "Revenue FY2023",
+        "edgar_value": 1684.179,
+        "analyst_implied": 2837.7464788732395,
+        "pct_diff": 68.49435118673487
+      },
+      {
+        "metric": "Revenue FY2022",
+        "edgar_value": 1643.44,
+        "analyst_implied": 2837.7464788732395,
+        "pct_diff": 72.67113365095406
+      },
+      {
+        "metric": "Gross Margin FY2025",
+        "edgar_value": 69.8419968158214,
+        "analyst_value": 72.2,
+        "diff_pp": 2.3580031841785996
+      },
+      {
+        "metric": "EBITDA Margin FY2025",
+        "edgar_gaap_ebitda_margin": 6.3051660204459115,
+        "edgar_adj_ebitda_margin": 19.60327811312798,
+        "analyst_value": 21.4,
+        "closer_to": "ADJUSTED (SBC added back)",
+        "sbc_millions": 421.306
+      },
+      {
+        "metric": "Revenue Growth FY2022-FY2023",
+        "edgar_value": 2.478885751837609,
+        "analyst_value": 16.3,
+        "diff_pp": 13.821114248162392
+      },
+      {
+        "metric": "Revenue Growth FY2023-FY2024",
+        "edgar_value": 29.49027389606449,
+        "analyst_value": 4.4,
+        "diff_pp": -25.090273896064488
+      }
+    ]
+  },
+  {
+    "company": "Nutanix",
+    "ticker": "NTNX",
+    "comparisons": [
+      {
+        "metric": "Revenue FY2023",
+        "edgar_value": 1394.364,
+        "analyst_implied": 1972.7368421052631,
+        "pct_diff": 41.47932979517996
+      },
+      {
+        "metric": "Revenue FY2022",
+        "edgar_value": 1307.682,
+        "analyst_implied": 1972.7368421052631,
+        "pct_diff": 50.85753586156749
+      },
+      {
+        "metric": "Gross Margin FY2025",
+        "edgar_value": 86.80884044340125,
+        "analyst_value": 86.8,
+        "diff_pp": -0.00884044340125456
+      },
+      {
+        "metric": "EBITDA Margin FY2025",
+        "edgar_gaap_ebitda_margin": 9.663083295934044,
+        "edgar_adj_ebitda_margin": 23.516515644461013,
+        "analyst_value": 18.2,
+        "closer_to": "ADJUSTED (SBC added back)",
+        "sbc_millions": 351.59
+      },
+      {
+        "metric": "Revenue Growth FY2022-FY2023",
+        "edgar_value": 6.628675778973787,
+        "analyst_value": 25.8,
+        "diff_pp": 19.171324221026214
+      },
+      {
+        "metric": "Revenue Growth FY2023-FY2024",
+        "edgar_value": 13.370396826079848,
+        "analyst_value": 16.6,
+        "diff_pp": 3.229603173920154
+      }
+    ]
+  },
+  {
+    "company": "Dynatrace",
+    "ticker": "DT",
+    "comparisons": [
+      {
+        "metric": "Revenue FY2023",
+        "edgar_value": 703.509,
+        "analyst_implied": 1358.2758620689656,
+        "pct_diff": 93.07156867488057
+      },
+      {
+        "metric": "Revenue FY2022",
+        "edgar_value": 545.803,
+        "analyst_implied": 1358.2758620689656,
+        "pct_diff": 148.85826242599722
+      },
+      {
+        "metric": "Gross Margin FY2025",
+        "edgar_value": 81.15057370916175,
+        "analyst_value": 84.7,
+        "diff_pp": 3.5494262908382552
+      },
+      {
+        "metric": "EBITDA Margin FY2025",
+        "edgar_gaap_ebitda_margin": 10.56306562201423,
+        "edgar_adj_ebitda_margin": 26.55798639298798,
+        "analyst_value": 29.1,
+        "closer_to": "ADJUSTED (SBC added back)",
+        "sbc_millions": 271.703
+      },
+      {
+        "metric": "Revenue Growth FY2022-FY2023",
+        "edgar_value": 28.89430801956017,
+        "analyst_value": 24.1,
+        "diff_pp": -4.7943080195601695
+      },
+      {
+        "metric": "Revenue Growth FY2023-FY2024",
+        "edgar_value": 32.11558061090903,
+        "analyst_value": 23.5,
+        "diff_pp": -8.615580610909028
+      }
+    ]
+  },
+  {
+    "company": "Commvault Systems",
+    "ticker": "CVLT",
+    "comparisons": [
+      {
+        "metric": "Revenue FY2023",
+        "edgar_value": 723.472,
+        "analyst_implied": 827.530864197531,
+        "pct_diff": 14.383260747828661
+      },
+      {
+        "metric": "Revenue FY2022",
+        "edgar_value": 670.885,
+        "analyst_implied": 827.530864197531,
+        "pct_diff": 23.349137959192852
+      },
+      {
+        "metric": "EBITDA Margin FY2025",
+        "edgar_gaap_ebitda_margin": 8.328989302132642,
+        "edgar_adj_ebitda_margin": 19.705027726469666,
+        "analyst_value": 21.6,
+        "closer_to": "ADJUSTED (SBC added back)",
+        "sbc_millions": 113.262
+      },
+      {
+        "metric": "Revenue Growth FY2022-FY2023",
+        "edgar_value": 7.838452193744085,
+        "analyst_value": 22.1,
+        "diff_pp": 14.261547806255916
+      },
+      {
+        "metric": "Revenue Growth FY2023-FY2024",
+        "edgar_value": 6.374676559700998,
+        "analyst_value": 5.5,
+        "diff_pp": -0.8746765597009976
+      }
+    ]
+  },
+  {
+    "company": "PagerDuty",
+    "ticker": "PD",
+    "comparisons": [
+      {
+        "metric": "Revenue FY2023",
+        "edgar_value": 213.556,
+        "analyst_implied": 421.6279069767442,
+        "pct_diff": 97.43201173310241
+      },
+      {
+        "metric": "Revenue FY2022",
+        "edgar_value": 166.351,
+        "analyst_implied": 421.6279069767442,
+        "pct_diff": 153.4567913488613
+      },
+      {
+        "metric": "EBITDA Margin FY2026",
+        "edgar_gaap_ebitda_margin": 3.8497927097164526,
+        "edgar_adj_ebitda_margin": 23.70661826509605,
+        "analyst_value": 21.2,
+        "closer_to": "ADJUSTED (SBC added back)",
+        "sbc_millions": 97.804
+      },
+      {
+        "metric": "Revenue Growth FY2022-FY2023",
+        "edgar_value": 28.376745556083222,
+        "analyst_value": 18.9,
+        "diff_pp": -9.476745556083223
+      },
+      {
+        "metric": "Revenue Growth FY2023-FY2024",
+        "edgar_value": 31.76684335724587,
+        "analyst_value": 17.2,
+        "diff_pp": -14.566843357245872
+      }
+    ]
+  },
+  {
+    "company": "Atlassian",
+    "ticker": "TEAM",
+    "comparisons": [
+      {
+        "metric": "Revenue FY2023",
+        "edgar_value": 2089.132,
+        "analyst_implied": 3932.168674698795,
+        "pct_diff": 88.22021177689082
+      },
+      {
+        "metric": "Revenue FY2022",
+        "edgar_value": 2089.132,
+        "analyst_implied": 3932.168674698795,
+        "pct_diff": 88.22021177689082
+      },
+      {
+        "metric": "Gross Margin FY2024",
+        "edgar_value": 71.33325626979658,
+        "analyst_value": 83.8,
+        "diff_pp": 12.466743730203419
+      },
+      {
+        "metric": "EBITDA Margin FY2025",
+        "edgar_gaap_ebitda_margin": -0.728950795581619,
+        "edgar_adj_ebitda_margin": 25.390753827581285,
+        "analyst_value": 24.3,
+        "closer_to": "ADJUSTED (SBC added back)",
+        "sbc_millions": 1362.222
+      },
+      {
+        "metric": "Revenue Growth FY2023-FY2024",
+        "edgar_value": 34.164906765106274,
+        "analyst_value": 24.3,
+        "diff_pp": -9.864906765106273
+      }
+    ]
+  },
+  {
+    "company": "Gitlab",
+    "ticker": "GTLB",
+    "comparisons": [
+      {
+        "metric": "Revenue FY2023",
+        "edgar_value": 152.176,
+        "analyst_implied": 566.2264150943396,
+        "pct_diff": 272.08654130371383
+      },
+      {
+        "metric": "Revenue FY2022",
+        "edgar_value": 81.227,
+        "analyst_implied": 566.2264150943396,
+        "pct_diff": 597.0913798297852
+      },
+      {
+        "metric": "EBITDA Margin FY2026",
+        "edgar_gaap_ebitda_margin": -7.035103808112024,
+        "edgar_adj_ebitda_margin": 15.467576191552975,
+        "analyst_value": 9.0,
+        "closer_to": "ADJUSTED (SBC added back)",
+        "sbc_millions": 214.951
+      },
+      {
+        "metric": "Revenue Growth FY2022-FY2023",
+        "edgar_value": 87.34657195267583,
+        "analyst_value": 7.9,
+        "diff_pp": -79.44657195267582
+      },
+      {
+        "metric": "Revenue Growth FY2023-FY2024",
+        "edgar_value": 66.02683734623068,
+        "analyst_value": 38.3,
+        "diff_pp": -27.72683734623068
+      }
+    ]
+  },
+  {
+    "company": "Cloudflare",
+    "ticker": "NET",
+    "comparisons": [
+      {
+        "metric": "Revenue FY2023",
+        "edgar_value": 656.426,
+        "analyst_implied": 1295.28,
+        "pct_diff": 97.3230798292572
+      },
+      {
+        "metric": "Revenue FY2022",
+        "edgar_value": 431.059,
+        "analyst_implied": 1295.28,
+        "pct_diff": 200.48786825005394
+      },
+      {
+        "metric": "Gross Margin FY2025",
+        "edgar_value": 74.5137889154528,
+        "analyst_value": 79.0,
+        "diff_pp": 4.486211084547193
+      },
+      {
+        "metric": "EBITDA Margin FY2025",
+        "edgar_gaap_ebitda_margin": -0.8055123373050046,
+        "edgar_adj_ebitda_margin": 20.018616777148043,
+        "analyst_value": 20.7,
+        "closer_to": "ADJUSTED (SBC added back)",
+        "sbc_millions": 451.454
+      },
+      {
+        "metric": "Revenue Growth FY2022-FY2023",
+        "edgar_value": 52.28217019015958,
+        "analyst_value": 10.3,
+        "diff_pp": -41.98217019015958
+      },
+      {
+        "metric": "Revenue Growth FY2023-FY2024",
+        "edgar_value": 48.56830777574319,
+        "analyst_value": 33.0,
+        "diff_pp": -15.568307775743193
+      }
+    ]
+  }
+]
